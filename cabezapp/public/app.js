@@ -30,6 +30,8 @@ const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); r
 const isPast = (d, h) => { const x = fromYmd(d); x.setHours(+h.slice(0, 2), +h.slice(2)); return x <= new Date(); };
 const slotTxt = (s) => `${shortDay(s.slice(0, 8))} · ${hm(s.slice(8))}`;
 const firstName = (n) => String(n || "").trim().split(/\s+/)[0] || "";
+const callName = (c) => (c && c.nick) || firstName(c && c.name);
+const fullName = (c) => c.name + (c.nick ? ` «${c.nick}»` : "");
 const weekRange = (w) => `${fmt(fromYmd(w), { day: "numeric" })}–${fmt(addDays(fromYmd(w), 6), { day: "numeric", month: "short" })}`;
 const weekLabel = (w, weeks) => (w === weeks.current ? "esta semana" : w === weeks.next ? "la semana que viene" : "la semana del " + weekRange(w));
 const store = {
@@ -76,6 +78,7 @@ const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
 window.addEventListener("beforeinstallprompt", (e) => {
   e.preventDefault(); deferredPrompt = e;
   document.querySelectorAll("[data-install-btn]").forEach((b) => (b.hidden = false));
+  document.querySelectorAll(".install-how").forEach((x) => (x.hidden = true));
 });
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-install-btn]");
@@ -88,9 +91,9 @@ document.addEventListener("click", async (e) => {
 function installCard(what) {
   if (standalone()) return "";
   const how = isIOS
-    ? "En Safari: botón Compartir y luego «Añadir a pantalla de inicio»."
-    : "Menú del navegador (⋮) y «Instalar app» o «Añadir a pantalla de inicio».";
-  return `<div class="card install"><img src="/icon-192.png" alt=""><div class="grow"><b>Tenla como app</b><p>${esc(what)} ${how}</p></div>
+    ? "En el iPhone: toca el botón Compartir (el cuadrado con la flecha) y luego «Añadir a pantalla de inicio»."
+    : deferredPrompt ? "" : "En Android: menú ⋮ de Chrome y «Instalar aplicación» o «Añadir a pantalla de inicio».";
+  return `<div class="card install"><img src="/icon-192.png" alt=""><div class="grow"><b>Instálala como app</b><p>${esc(what)} <span class="install-how">${how}</span></p></div>
     ${isIOS ? "" : `<button class="btn primary sm" data-install-btn ${deferredPrompt ? "" : "hidden"}>Instalar</button>`}</div>`;
 }
 if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
@@ -99,7 +102,7 @@ if ("serviceWorker" in navigator) window.addEventListener("load", () => navigato
 // Request form: one tap (which week); the rest is optional
 // =====================================================================
 function requestForm(el, { needContact, weeks, onDone }) {
-  const s = { week: weeks.current, pref: "igual", style: STYLES[0], note: "", name: "", phone: "", busy: false, error: "", more: false };
+  const s = { week: weeks.current, pref: "igual", style: STYLES[0], note: "", name: "", nick: "", phone: "", busy: false, error: "", more: false };
   const ready = () => !needContact || (s.name.trim().length > 1 && s.phone.replace(/\D/g, "").length >= 9);
   function draw() {
     el.innerHTML = `
@@ -108,6 +111,7 @@ function requestForm(el, { needContact, weeks, onDone }) {
       </div>
       ${needContact ? `<div class="grid2">
           <div><label class="fl" for="rq-name">Tu nombre</label><input class="field" id="rq-name" autocomplete="given-name" maxlength="40" value="${esc(s.name)}" placeholder="Nombre o mote"></div>
+          <div><label class="fl" for="rq-nick">Tu mote <span class="muted">(opcional)</span></label><input class="field" id="rq-nick" maxlength="30" value="${esc(s.nick)}" placeholder="Como te llaman"></div>
           <div><label class="fl" for="rq-phone">Tu móvil</label><input class="field" id="rq-phone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(s.phone)}" placeholder="600 123 456"></div>
         </div>` : ""}
       <details class="more" ${s.more ? "open" : ""}><summary>Más detalles (opcional)</summary>
@@ -129,7 +133,7 @@ function requestForm(el, { needContact, weeks, onDone }) {
     else if (b.dataset.style) s.style = b.dataset.style;
     else if (b.id === "rq-send") {
       s.busy = true; s.error = ""; draw();
-      try { await onDone({ week: s.week, pref: s.pref, style: s.style, note: s.note, name: s.name, phone: s.phone }); return; }
+      try { await onDone({ week: s.week, pref: s.pref, style: s.style, note: s.note, name: s.name, nick: s.nick, phone: s.phone }); return; }
       catch (err) { s.error = err.message; s.busy = false; }
     } else return;
     draw();
@@ -139,6 +143,7 @@ function requestForm(el, { needContact, weeks, onDone }) {
     const t = e.target;
     if (t.id === "rq-note") s.note = t.value;
     if (t.id === "rq-name") s.name = t.value;
+    if (t.id === "rq-nick") s.nick = t.value;
     if (t.id === "rq-phone") s.phone = t.value;
     if (t.id === "rq-name" || t.id === "rq-phone") $("#rq-send", el).disabled = !ready();
   });
@@ -198,27 +203,27 @@ async function landing() {
 // =====================================================================
 const STATUS_TXT = { pedida: "Pedido", huecos: "Elige hueco", confirmada: "Confirmada", hecha: "Hecho", rechazada: "No pudo ser", cancelada: "Cancelada" };
 
-function punchCard(me, settings) {
+// Cut card: any number of cuts (bonos of 5, cuts paid before, gifts...)
+function punchCard(me) {
   if (!me.total) {
     return `<div class="bono empty"><div class="top"><div>
-      <div class="eyebrow">Tu bono</div><div class="big">0<small>cortes</small></div>
-      <div class="sub muted">Sin bono. Corte suelto: ${settings.loosePrice} €. Bono de ${settings.cutsPerBono} cortes: ${settings.bonoPrice} €.</div></div>
-      <span class="sticker">Pídele uno</span></div></div>`;
+      <div class="eyebrow">Tus cortes</div><div class="big">0<small>cortes</small></div>
+      <div class="sub muted">No tienes cortes cargados. Pídele a Cabezas que te cargue unos.</div></div></div></div>`;
   }
-  const per = settings.cutsPerBono;
-  const usedInCurrent = me.remaining === 0 ? per : me.used % per;
-  const extra = Math.max(0, me.remaining - (per - usedInCurrent));
-  const holes = Array.from({ length: per }, (_, i) => i < usedInCurrent
+  const show = Math.min(me.total, 10);
+  const leftShown = Math.min(me.remaining, show);
+  const extra = me.remaining - leftShown;
+  const holes = Array.from({ length: show }, (_, i) => i < show - leftShown
     ? `<span class="hole used" title="Corte gastado">${ICON.scissors}</span>`
     : `<span class="hole">${i + 1}</span>`).join("");
   return `<div class="bono">
     <div class="top"><div>
       <div class="eyebrow" style="color:#C9D2EA">Te quedan</div>
       <div class="big">${me.remaining}<small>${me.remaining === 1 ? "corte" : "cortes"}</small></div>
-      <div class="sub">Llevas ${me.used} de ${me.total}${me.bonos > 1 ? ` · ${me.bonos} bonos` : ""}</div></div>
-      ${me.remaining === 0 ? `<span class="sticker">Toca renovar</span>` : me.remaining === 1 ? `<span class="sticker">Último corte</span>` : extra ? `<span class="sticker">+${extra} en otro bono</span>` : ""}
+      <div class="sub">Llevas ${me.used} de ${me.total}</div></div>
+      ${me.remaining === 0 ? `<span class="sticker">Toca recargar</span>` : me.remaining === 1 ? `<span class="sticker">Último corte</span>` : extra ? `<span class="sticker">+${extra} más</span>` : ""}
     </div>
-    <div class="holes" aria-label="${usedInCurrent} de ${per} cortes gastados en este bono">${holes}</div>
+    <div class="holes" aria-label="${me.remaining} cortes por gastar">${holes}</div>
   </div>`;
 }
 
@@ -240,7 +245,7 @@ function statusBlock(c, me, settings, weeks) {
     return `<section class="state"><span class="eyebrow">Tu cita</span>${progress(1)}
       <h2>Pedido enviado para ${esc(wl)}</h2>
       <p>Ahora Cabezas te pasa las horas libres por WhatsApp. Cuando te lleguen, entra aquí y elige una.</p>
-      ${toCabezas(requestMsg(c, me.name, weeks), "Avisar a Cabezas")}
+      ${toCabezas(requestMsg(c, fullName(me), weeks), "Avisar a Cabezas")}
       <button class="linkbtn" data-cancel="${c.id}">Cancelar pedido</button></section>`;
   }
   if (c.status === "huecos") {
@@ -285,10 +290,10 @@ async function personal(token) {
   if (open && open.status === "huecos" && pickSel && !open.offer.includes(pickSel)) pickSel = null;
 
   app.innerHTML = `
-    <h1>¿Qué pasa, <em>${esc(firstName(me.name))}</em>?</h1>
+    <h1>¿Qué pasa, <em>${esc(callName(me))}</em>?</h1>
     ${statusBlock(open, me, settings, weeks)}
-    ${punchCard(me, settings)}
-    ${installCard("Tu cita y tu bono, siempre a mano.")}
+    ${installCard("Tu cita y tus cortes, siempre a mano.")}
+    ${punchCard(me)}
     <div class="section">
       <h2>${r ? "Tu reseña" : "Ponle nota a Cabezas"}</h2>
       <div class="card">
@@ -301,7 +306,7 @@ async function personal(token) {
     ${history.length ? `<div class="section"><h2>Tus cortes</h2><div class="list">${history.map((c) => `
       <div class="item"><div class="item-row"><div class="grow"><b>${esc(shortDay(c.d))}</b> · ${esc(c.style)}</div>
       <span class="muted small">${c.loose ? "Suelto" : "Del bono"}</span></div></div>`).join("")}</div></div>` : ""}
-    <footer class="foot">Este enlace es solo tuyo. ¿No eres ${esc(firstName(me.name))}? <button class="linkbtn" data-notme="1">Pedir con otro nombre</button></footer>`;
+    <footer class="foot">Este enlace es solo tuyo. ¿No eres ${esc(callName(me))}? <button class="linkbtn" data-notme="1">Pedir con otro nombre</button></footer>`;
 
   if (!open) {
     requestForm($("#rq"), {
@@ -350,8 +355,8 @@ async function personal(token) {
 const A = { db: null, tab: "peticiones", week: 0, openClient: null, sel: {} };
 
 const offerMsg = (c, cl, slots) =>
-  `Ey ${firstName(cl.name)} 💈 Huecos para cortarte ${weekLabel(c.week, A.db.weeks)}:\n${slots.map((s) => "• " + slotTxt(s)).join("\n")}\n\nPilla el tuyo aquí antes de que vuele 👇\n${personalLink(cl.token)}`;
-const rejectMsg = (c, cl) => `Ey ${firstName(cl.name)}, ${weekLabel(c.week, A.db.weeks)} imposible 😩 Pídemelo para otra semana aquí:\n${personalLink(cl.token)}`;
+  `Ey ${callName(cl)} 💈 Huecos para cortarte ${weekLabel(c.week, A.db.weeks)}:\n${slots.map((s) => "• " + slotTxt(s)).join("\n")}\n\nPilla el tuyo aquí antes de que vuele 👇\n${personalLink(cl.token)}`;
+const rejectMsg = (c, cl) => `Ey ${callName(cl)}, ${weekLabel(c.week, A.db.weeks)} imposible 😩 Pídemelo para otra semana aquí:\n${personalLink(cl.token)}`;
 // Confirmation WhatsApp: no prices, just "tienes corte" and a bit of cachondeo
 const JOKES = [
   "Ven con la cabeza lavada, que esto es una barbería seria (más o menos).",
@@ -362,9 +367,9 @@ const JOKES = [
 ];
 function confirmMsg(c, cl, s) {
   const joke = JOKES[[...c.id].reduce((a, ch) => a + ch.charCodeAt(0), 0) % JOKES.length];
-  return `💈 ¡${firstName(cl.name)}, tienes corte, máquina!\n\n📅 ${longDay(c.d)} a las ${hm(c.h)}\n✂️ ${c.style}\n\n${joke}\n\n⚠️ ${s.confirmText}\n\nTu cita, aquí:\n${personalLink(cl.token)}`;
+  return `💈 ¡${callName(cl)}, tienes corte, máquina!\n\n📅 ${longDay(c.d)} a las ${hm(c.h)}\n✂️ ${c.style}\n\n${joke}\n\n⚠️ ${s.confirmText}\n\nTu cita, aquí:\n${personalLink(cl.token)}`;
 }
-const linkMsg = (cl) => `Ey ${firstName(cl.name)}! 💈 Esta es tu zona de CabezApp: pides corte, ves cuántos te quedan del bono y me dejas reseña. Es solo tuya, guárdala o instálala como app:\n${personalLink(cl.token)}`;
+const linkMsg = (cl) => `Ey ${callName(cl)}! 💈 Esta es tu zona de CabezApp: pides corte, ves cuántos te quedan del bono y me dejas reseña. Es solo tuya, guárdala o instálala como app:\n${personalLink(cl.token)}`;
 const doneMsg = (cl, left) => `Corte hecho ✂️ ${left > 0 ? `Te ${left === 1 ? "queda" : "quedan"} ${left} ${left === 1 ? "corte" : "cortes"} del bono.` : "Bono fundido, toca renovar 🫡"}\nSi te ha gustado (o no), déjame reseña:\n${personalLink(cl.token)}`;
 const bonoMsg = (cl, s) => `Bono cargado 🎟️ Tienes ${cl.remaining + s.cutsPerBono} cortes por delante. A lucir cabeza. Míralo aquí:\n${personalLink(cl.token)}`;
 
@@ -428,7 +433,7 @@ function head(c) {
   const when = c.d ? `<div class="time">${hm(c.h)}</div>` : "";
   const sub = c.d ? `${esc(shortDay(c.d))} · ${esc(c.style)}` : `${esc(cap(weekLabel(c.week, A.db.weeks)))} · ${esc(prefLabel(c.pref).toLowerCase())} · ${esc(c.style)}`;
   return `<div class="item-row">${when}
-    <div class="grow"><div class="name">${esc(cl.name)}</div><div class="muted small">${sub} · ${cl.remaining > 0 ? `bono: ${cl.remaining}` : "sin bono"}</div></div>
+    <div class="grow"><div class="name">${esc(fullName(cl))}</div><div class="muted small">${sub} · ${cl.remaining > 0 ? `le quedan ${cl.remaining}` : "sin cortes"}</div></div>
     <span class="status st-${c.status}">${STATUS_TXT[c.status]}</span></div>
     ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}`;
 }
@@ -510,7 +515,7 @@ function paneHorario(el) {
       ${allPast ? "" : `<div class="quick"><button data-q="tarde" data-d="${d}">Tarde</button><button data-q="manana" data-d="${d}">Mañana</button><button data-q="nada" data-d="${d}">Nada</button></div>`}</div>
       <div class="hours wide">${HOURS.map((h) => {
         const c = booked[d + h], past = isPast(d, h), on = sel.includes(h);
-        if (c) return `<button class="chip taken" disabled title="${esc(clientById(c.clientId).name)}">${esc(firstName(clientById(c.clientId).name).slice(0, 7))}</button>`;
+        if (c) return `<button class="chip taken" disabled title="${esc(clientById(c.clientId).name)}">${esc(callName(clientById(c.clientId)).slice(0, 7))}</button>`;
         return `<button class="chip${on ? " on" : ""}" data-d="${d}" data-h="${h}" ${past ? "disabled" : ""} aria-pressed="${on}">${hm(h)}</button>`;
       }).join("")}</div></section>`;
   }
@@ -550,9 +555,11 @@ function paneClientes(el) {
   el.innerHTML = `
     <form class="card" id="newc">
       <h3>Nuevo cliente</h3>
-      <div class="grid2"><div><label class="fl" for="nc-name">Nombre</label><input class="field" id="nc-name" maxlength="40" required placeholder="Pablo"></div>
-      <div><label class="fl" for="nc-phone">Móvil</label><input class="field" id="nc-phone" type="tel" inputmode="tel" placeholder="600 123 456"></div></div>
-      <label class="check"><input type="checkbox" id="nc-bono" checked> Ha pagado bono (${s.cutsPerBono} cortes · ${s.bonoPrice} €)</label>
+      <div class="grid2"><div><label class="fl" for="nc-name">Nombre</label><input class="field" id="nc-name" maxlength="40" required placeholder="Pablo Martín"></div>
+      <div><label class="fl" for="nc-nick">Mote</label><input class="field" id="nc-nick" maxlength="30" placeholder="El Rubio"></div>
+      <div><label class="fl" for="nc-phone">Móvil</label><input class="field" id="nc-phone" type="tel" inputmode="tel" placeholder="600 123 456"></div>
+      <div><label class="fl" for="nc-cuts">Cortes que ya tiene</label><input class="field" id="nc-cuts" type="number" inputmode="numeric" min="0" max="50" value="0"></div></div>
+      <p class="muted small" style="margin:0">Pon los cortes que tenga pendientes de antes. Si compra un bono nuevo, usa «+ Bono» en su ficha.</p>
       <button class="btn primary">Añadir</button>
     </form>
     <div class="section"><div class="section-head"><h2>Clientes</h2><span class="muted small">${list.length}</span></div>
@@ -563,26 +570,31 @@ function clientCard(c, s) {
   const dots = c.total ? Array.from({ length: Math.min(c.total, 10) }, (_, i) => `<span class="${i < c.used ? "u" : ""}"></span>`).join("") : "";
   const link = personalLink(c.token);
   return `<details class="item client" ${A.openClient === c.id ? "open" : ""} data-client="${c.id}">
-    <summary class="item-row"><div class="grow"><div class="name">${esc(c.name)}</div>
-      <div class="muted small">${c.total ? `<span class="mini">${dots}</span> ${c.remaining} de ${c.total}` : "Sin bono"}${c.phone ? "" : " · sin móvil"}</div></div>
+    <summary class="item-row"><div class="grow"><div class="name">${esc(fullName(c))}</div>
+      <div class="muted small">${c.total ? `<span class="mini">${dots}</span> ${c.remaining} de ${c.total}` : "Sin cortes"}${c.phone ? "" : " · sin móvil"}</div></div>
       <span class="status ${c.remaining ? "st-confirmada" : "st-cancelada"}">${c.remaining} ${c.remaining === 1 ? "corte" : "cortes"}</span></summary>
     <div class="body">
       <div class="row">
         ${c.phone ? `<a class="btn ok sm" href="${wa(c.phone, bonoMsg(c, s))}" target="_blank" rel="noopener" data-cact="add-bono" data-id="${c.id}">+ Bono (${s.bonoPrice} €)</a>`
           : `<button class="btn ok sm" data-cact="add-bono" data-id="${c.id}">+ Bono (${s.bonoPrice} €)</button>`}
-        <button class="btn ghost sm" data-cact="adjust" data-delta="1" data-id="${c.id}" ${c.remaining ? "" : "disabled"}>−1 corte</button>
-        <button class="btn ghost sm" data-cact="adjust" data-delta="-1" data-id="${c.id}" ${c.used ? "" : "disabled"}>+1 corte</button>
+        <button class="btn ghost sm" data-cact="adjust" data-delta="1" data-id="${c.id}" ${c.remaining ? "" : "disabled"}>Gastar 1</button>
+        <button class="btn ghost sm" data-cact="adjust" data-delta="-1" data-id="${c.id}" ${c.used ? "" : "disabled"}>Devolver 1</button>
       </div>
+      <div><span class="eyebrow">Añadir cortes sueltos</span>
+        <div class="row addcuts"><input class="field" id="ac-${c.id}" type="number" inputmode="numeric" min="1" max="50" value="1" aria-label="Cortes">
+        <input class="field" id="ap-${c.id}" type="number" inputmode="decimal" min="0" step="0.5" placeholder="€" aria-label="Pagado (opcional)">
+        <button class="btn ok sm" data-cact="add-cuts" data-id="${c.id}">Añadir</button></div></div>
       <div><span class="eyebrow">Su enlace personal</span><div class="copybox">${esc(link)}</div></div>
       <div class="row">
         ${c.phone ? `<a class="btn wa sm" href="${wa(c.phone, linkMsg(c))}" target="_blank" rel="noopener">${ICON.wa} Mandarle su enlace</a>` : ""}
         <button class="btn ghost sm" data-copy="${esc(link)}">Copiar enlace</button>
       </div>
-      ${c.bonos.length ? `<div class="muted small">Bonos: ${c.bonos.map((b) => `${new Date(b.date).toLocaleDateString("es-ES", { day: "numeric", month: "short" })} (${b.price} €) <button class="linkbtn" data-cact="remove-bono" data-id="${c.id}" data-bono="${b.id}">quitar</button>`).join(" · ")}</div>` : ""}
+      ${c.bonos.length ? `<div class="muted small">Cortes cargados: ${c.bonos.map((b) => `${new Date(b.date).toLocaleDateString("es-ES", { day: "numeric", month: "short" })}: ${b.cuts}${b.price ? ` (${b.price} €)` : b.kind === "previos" ? " (de antes)" : ""} <button class="linkbtn" data-cact="remove-bono" data-id="${c.id}" data-bono="${b.id}">quitar</button>`).join(" · ")}</div>` : ""}
       <div class="grid2"><div><label class="fl" for="en-${c.id}">Nombre</label><input class="field" id="en-${c.id}" value="${esc(c.name)}" maxlength="40"></div>
+      <div><label class="fl" for="ek-${c.id}">Mote</label><input class="field" id="ek-${c.id}" value="${esc(c.nick || "")}" maxlength="30"></div>
       <div><label class="fl" for="ep-${c.id}">Móvil</label><input class="field" id="ep-${c.id}" type="tel" value="${esc(c.phone)}"></div></div>
       ${A.db.clients.length > 1 ? `<div><label class="fl" for="mg-${c.id}">¿Es la misma persona que otro cliente?</label>
-        <div class="row"><select class="field" id="mg-${c.id}" style="flex:2 1 160px"><option value="">Elige con quién unirlo…</option>${A.db.clients.filter((x) => x.id !== c.id).sort((a, b) => a.name.localeCompare(b.name, "es")).map((x) => `<option value="${x.id}">${esc(x.name)}${x.phone ? " · …" + esc(x.phone.slice(-3)) : ""}</option>`).join("")}</select>
+        <div class="row"><select class="field" id="mg-${c.id}" style="flex:2 1 160px"><option value="">Elige con quién unirlo…</option>${A.db.clients.filter((x) => x.id !== c.id).sort((a, b) => a.name.localeCompare(b.name, "es")).map((x) => `<option value="${x.id}">${esc(fullName(x))}${x.phone ? " · …" + esc(x.phone.slice(-3)) : ""}</option>`).join("")}</select>
         <button class="btn ghost sm" data-cact="merge" data-id="${c.id}">Unir</button></div>
         <p class="muted small" style="margin:4px 0 0">Sus pedidos, bonos y reseña pasan al elegido, y esta ficha se borra.</p></div>` : ""}
       <div class="row"><button class="btn ghost sm" data-cact="edit-client" data-id="${c.id}">Guardar datos</button>
@@ -677,7 +689,8 @@ function wireAdmin() {
       let body = { id: ds.id };
       if (ds.cact === "adjust") body.delta = +ds.delta;
       if (ds.cact === "remove-bono") body.bonoId = ds.bono;
-      if (ds.cact === "edit-client") body = { id: ds.id, name: $("#en-" + ds.id).value, phone: $("#ep-" + ds.id).value };
+      if (ds.cact === "edit-client") body = { id: ds.id, name: $("#en-" + ds.id).value, nick: $("#ek-" + ds.id).value, phone: $("#ep-" + ds.id).value };
+      if (ds.cact === "add-cuts") body = { id: ds.id, cuts: $("#ac-" + ds.id).value, price: $("#ap-" + ds.id).value };
       if (ds.cact === "delete-client" && ds.sure !== "1") { ds.sure = "1"; t.textContent = "Se borra todo. ¿Seguro?"; return; }
       if (ds.cact === "merge") {
         body.into = $("#mg-" + ds.id).value;
@@ -688,7 +701,7 @@ function wireAdmin() {
         await adminCall(ds.cact, body);
         if (ds.cact === "delete-client") A.openClient = null;
         if (ds.cact === "merge") A.openClient = body.into;
-        toast({ "add-bono": "Bono añadido", adjust: "Bono ajustado", "edit-client": "Guardado", "delete-client": "Cliente borrado", "remove-bono": "Bono quitado", merge: "Clientes unidos" }[ds.cact]);
+        toast({ "add-bono": "Bono añadido", adjust: "Apuntado", "edit-client": "Guardado", "delete-client": "Cliente borrado", "remove-bono": "Quitado", merge: "Clientes unidos", "add-cuts": "Cortes añadidos" }[ds.cact]);
         drawAdmin();
       } catch {}
       return;
@@ -703,7 +716,7 @@ function wireAdmin() {
     if (e.target.id !== "newc") return;
     e.preventDefault();
     try {
-      const r = await adminCall("add-client", { name: $("#nc-name").value, phone: $("#nc-phone").value, withBono: $("#nc-bono").checked });
+      const r = await adminCall("add-client", { name: $("#nc-name").value, nick: $("#nc-nick").value, phone: $("#nc-phone").value, cuts: $("#nc-cuts").value });
       A.openClient = r.result.client.id;
       toast("Cliente añadido. Mándale su enlace.");
       drawAdmin();

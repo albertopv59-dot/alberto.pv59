@@ -73,7 +73,7 @@ function publicReviews(db) {
   const list = db.reviews
     .filter((r) => !r.hidden && byId[r.clientId])
     .sort((a, b) => b.date.localeCompare(a.date))
-    .map((r) => ({ id: r.id, name: byId[r.clientId].name.split(" ")[0], stars: r.stars, text: r.text, date: r.date }));
+    .map((r) => ({ id: r.id, name: byId[r.clientId].nick || byId[r.clientId].name.split(" ")[0], stars: r.stars, text: r.text, date: r.date }));
   const avg = list.length ? list.reduce((a, r) => a + r.stars, 0) / list.length : 0;
   return { list: list.slice(0, 30), avg: Math.round(avg * 10) / 10, count: list.length };
 }
@@ -85,6 +85,7 @@ function clientView(db, c) {
   const taken = takenSlots(db);
   return {
     name: c.name,
+    nick: c.nick || "",
     total: totalCuts(c),
     used: c.used,
     remaining: remaining(c),
@@ -182,7 +183,7 @@ export default async (req) => {
         if (!phone) return { error: "Pon un móvil válido (ej. 600 123 456)" };
         c = db.clients.find((x) => x.phone === phone);
         if (!c) {
-          c = { id: id(), token: id(9), name, phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
+          c = { id: id(), token: id(9), name, nick: clean(body.nick, 30), phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
           db.clients.push(c);
         }
       }
@@ -309,8 +310,10 @@ export default async (req) => {
           if (name.length < 2) return { error: "Pon el nombre" };
           if (body.phone && !phone) return { error: "Móvil no válido" };
           if (phone && db.clients.some((x) => x.phone === phone)) return { error: "Ya hay un cliente con ese móvil" };
-          const c = { id: id(), token: id(9), name, phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
-          if (body.withBono) c.bonos.push({ id: id(), date: new Date().toISOString(), cuts: db.settings.cutsPerBono, price: db.settings.bonoPrice });
+          const cuts = Math.round(Number(body.cuts) || 0);
+          if (cuts < 0 || cuts > 50) return { error: "Entre 0 y 50 cortes" };
+          const c = { id: id(), token: id(9), name, nick: clean(body.nick, 30), phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
+          if (cuts) c.bonos.push({ id: id(), date: new Date().toISOString(), cuts, price: 0, kind: "previos" });
           db.clients.push(c);
           return { client: c };
         }
@@ -318,12 +321,23 @@ export default async (req) => {
           const c = client(body.id);
           if (!c) return { error: "Cliente no encontrado" };
           if (body.name !== undefined) { const n = clean(body.name, 40); if (n.length < 2) return { error: "Pon el nombre" }; c.name = n; }
+          if (body.nick !== undefined) c.nick = clean(body.nick, 30);
           if (body.phone !== undefined) {
             const p = normPhone(body.phone);
             if (body.phone && !p) return { error: "Móvil no válido" };
             if (p && db.clients.some((x) => x.phone === p && x.id !== c.id)) return { error: "Ese móvil ya es de otro cliente" };
             c.phone = p;
           }
+          return;
+        }
+        case "add-cuts": {
+          // Any number of cuts: ones already paid before, a gift, a custom deal...
+          const c = client(body.id);
+          if (!c) return { error: "Cliente no encontrado" };
+          const cuts = Math.round(Number(body.cuts) || 0);
+          if (cuts < 1 || cuts > 50) return { error: "Pon entre 1 y 50 cortes" };
+          const price = Math.max(0, Math.min(1000, Number(body.price) || 0));
+          c.bonos.push({ id: id(), date: new Date().toISOString(), cuts, price, kind: "manual" });
           return;
         }
         case "add-bono": {
