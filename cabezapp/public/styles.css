@@ -287,3 +287,6 @@ select.field { appearance: auto; }
 .pin { font-family: var(--f-display); font-weight: 800; font-size: 26px; letter-spacing: .18em; font-variant-numeric: tabular-nums; align-self: center; }
 .pin-in { letter-spacing: .3em; font-weight: 800; }
 #login .muted.small { margin: 0; }
+.bono .askmore { position: relative; z-index: 1; margin-top: 16px; align-self: flex-start; }
+.bono { display: flex; flex-direction: column; }
+.bono .btn.ghost { border-color: rgba(201,210,234,.35); color: #F2F4FA; }

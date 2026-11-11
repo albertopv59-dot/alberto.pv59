@@ -222,11 +222,14 @@ async function landing() {
 const STATUS_TXT = { pedida: "Pedido", huecos: "Elige hueco", confirmada: "Confirmada", hecha: "Hecho", rechazada: "No pudo ser", cancelada: "Cancelada" };
 
 // Cut card: any number of cuts (bonos of 5, cuts paid before, gifts...)
-function punchCard(me) {
+function punchCard(me, settings) {
+  const askMsg = `Ey Cabezas 💈 Soy ${fullName(me)}. Me ${me.remaining === 1 ? "queda 1 corte" : `quedan ${me.remaining} cortes`}, ¿me cargas más? 🙏`;
+  const ask = settings.adminPhone
+    ? `<a class="btn ${me.remaining <= 1 ? "primary" : "ghost"} sm askmore" href="${wa(settings.adminPhone, askMsg)}" target="_blank" rel="noopener">${ICON.wa} Pedir más cortes</a>` : "";
   if (!me.total) {
     return `<div class="bono empty"><div class="top"><div>
       <div class="eyebrow">Tus cortes</div><div class="big">0<small>cortes</small></div>
-      <div class="sub muted">No tienes cortes cargados. Pídele a Cabezas que te cargue unos.</div></div></div></div>`;
+      <div class="sub muted">No tienes cortes cargados. Pídele a Cabezas que te cargue unos.</div></div></div>${ask}</div>`;
   }
   const show = Math.min(me.total, 10);
   const leftShown = Math.min(me.remaining, show);
@@ -242,6 +245,7 @@ function punchCard(me) {
       ${me.remaining === 0 ? `<span class="sticker">Toca recargar</span>` : me.remaining === 1 ? `<span class="sticker">Último corte</span>` : extra ? `<span class="sticker">+${extra} más</span>` : ""}
     </div>
     <div class="holes" aria-label="${me.remaining} cortes por gastar">${holes}</div>
+    ${ask}
   </div>`;
 }
 
@@ -309,9 +313,9 @@ async function personal(token) {
 
   app.innerHTML = `
     <h1>¿Qué pasa, <em>${esc(callName(me))}</em>?</h1>
+    ${punchCard(me, settings)}
     ${statusBlock(open, me, settings, weeks)}
     ${installCard("Tu cita y tus cortes, siempre a mano.")}
-    ${punchCard(me)}
     <div class="section">
       <h2>${r ? "Tu reseña" : "Ponle nota a Cabezas"}</h2>
       <div class="card">
