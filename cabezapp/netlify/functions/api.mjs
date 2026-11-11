@@ -189,10 +189,10 @@ export default async (req) => {
       if (db.citas.some((x) => x.clientId === c.id && isOpen(x))) return { error: "Ya tienes un corte pedido. Espera a que Cabezas te pase huecos." };
       const cita = { id: id(), clientId: c.id, week, pref, style, note, status: "pedida", offer: [], createdAt: new Date().toISOString() };
       db.citas.push(cita);
-      return { cita };
+      return { cita, token: c.token };
     });
     if (out.error) return bad(out.error, out.status || 400);
-    return json({ ok: true });
+    return json({ ok: true, token: out.result.token });
   }
 
   if (path === "pick" && req.method === "POST") {
@@ -355,6 +355,20 @@ export default async (req) => {
           db.citas = db.citas.filter((x) => x.clientId !== c.id);
           db.reviews = db.reviews.filter((x) => x.clientId !== c.id);
           return;
+        }
+        case "merge": {
+          // Same person twice: move everything from `id` into `into` and drop `id`
+          const from = client(body.id), into = client(body.into);
+          if (!from || !into || from.id === into.id) return { error: "Elige otro cliente" };
+          into.bonos.push(...from.bonos);
+          into.used += from.used;
+          if (!into.phone && from.phone) into.phone = from.phone;
+          db.citas.forEach((x) => { if (x.clientId === from.id) x.clientId = into.id; });
+          const keep = db.reviews.find((r) => r.clientId === into.id);
+          db.reviews = db.reviews.filter((r) => r.clientId !== from.id || !keep);
+          db.reviews.forEach((r) => { if (r.clientId === from.id) r.clientId = into.id; });
+          db.clients = db.clients.filter((x) => x.id !== from.id);
+          return { into: into.id };
         }
         case "review-visibility": {
           const r = db.reviews.find((x) => x.id === body.id);

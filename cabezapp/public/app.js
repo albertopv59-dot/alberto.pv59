@@ -96,29 +96,30 @@ function installCard(what) {
 if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
 
 // =====================================================================
-// Request form: which week, when, which cut
+// Request form: one tap (which week); the rest is optional
 // =====================================================================
 function requestForm(el, { needContact, weeks, onDone }) {
-  const s = { week: weeks.current, pref: "igual", style: STYLES[0], note: "", name: "", phone: "", busy: false, error: "" };
+  const s = { week: weeks.current, pref: "igual", style: STYLES[0], note: "", name: "", phone: "", busy: false, error: "", more: false };
   const ready = () => !needContact || (s.name.trim().length > 1 && s.phone.replace(/\D/g, "").length >= 9);
   function draw() {
     el.innerHTML = `
-      <div class="step"><div class="step-t"><i>1</i> ¿Qué semana?</div>
-        <div class="weekpick">${[["current", "Esta semana"], ["next", "La que viene"]].map(([k, l]) => `
-          <button class="wbtn${s.week === weeks[k] ? " on" : ""}" data-week="${weeks[k]}" aria-pressed="${s.week === weeks[k]}"><b>${l}</b><span>${esc(weekRange(weeks[k]))}</span></button>`).join("")}
-        </div></div>
-      <div class="step"><div class="step-t"><i>2</i> ¿Cuándo te pilla mejor?</div>
-        <div class="pills">${PREFS.map(([k, l]) => `<button class="pill${s.pref === k ? " on" : ""}" data-pref="${k}" aria-pressed="${s.pref === k}">${l}</button>`).join("")}</div></div>
-      <div class="step"><div class="step-t"><i>3</i> ¿Qué te hacemos?</div>
-        <div class="pills">${STYLES.map((x) => `<button class="pill${s.style === x ? " on" : ""}" data-style="${esc(x)}" aria-pressed="${s.style === x}">${esc(x)}</button>`).join("")}</div>
-        <input class="field" id="rq-note" maxlength="200" placeholder="Algo más (opcional): «que no se note el trasquilón de la última vez»" value="${esc(s.note)}"></div>
-      ${needContact ? `<div class="step"><div class="step-t"><i>4</i> ¿Quién eres?</div>
-        <div class="grid2">
-          <div><label class="fl" for="rq-name">Nombre</label><input class="field" id="rq-name" autocomplete="given-name" maxlength="40" value="${esc(s.name)}" placeholder="Tu nombre o mote"></div>
-          <div><label class="fl" for="rq-phone">Móvil (WhatsApp)</label><input class="field" id="rq-phone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(s.phone)}" placeholder="600 123 456"></div>
-        </div><p class="muted small" style="margin:0">Cabezas te manda aquí los huecos.</p></div>` : ""}
+      <div class="weekpick">${[["current", "Esta semana"], ["next", "La que viene"]].map(([k, l]) => `
+        <button class="wbtn${s.week === weeks[k] ? " on" : ""}" data-week="${weeks[k]}" aria-pressed="${s.week === weeks[k]}"><b>${l}</b><span>${esc(weekRange(weeks[k]))}</span></button>`).join("")}
+      </div>
+      ${needContact ? `<div class="grid2">
+          <div><label class="fl" for="rq-name">Tu nombre</label><input class="field" id="rq-name" autocomplete="given-name" maxlength="40" value="${esc(s.name)}" placeholder="Nombre o mote"></div>
+          <div><label class="fl" for="rq-phone">Tu móvil</label><input class="field" id="rq-phone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(s.phone)}" placeholder="600 123 456"></div>
+        </div>` : ""}
+      <details class="more" ${s.more ? "open" : ""}><summary>Más detalles (opcional)</summary>
+        <div class="more-body">
+          <div class="step"><span class="eyebrow">¿Cuándo te viene mejor?</span>
+            <div class="pills">${PREFS.map(([k, l]) => `<button class="pill${s.pref === k ? " on" : ""}" data-pref="${k}" aria-pressed="${s.pref === k}">${l}</button>`).join("")}</div></div>
+          <div class="step"><span class="eyebrow">¿Qué corte?</span>
+            <div class="pills">${STYLES.map((x) => `<button class="pill${s.style === x ? " on" : ""}" data-style="${esc(x)}" aria-pressed="${s.style === x}">${esc(x)}</button>`).join("")}</div></div>
+          <input class="field" id="rq-note" maxlength="200" placeholder="Algo más para Cabezas" value="${esc(s.note)}">
+        </div></details>
       ${s.error ? `<p class="err">${esc(s.error)}</p>` : ""}
-      <button class="btn primary" id="rq-send" ${ready() && !s.busy ? "" : "disabled"}>${s.busy ? "Enviando…" : `Pedir corte para ${esc(weekLabel(s.week, weeks))}`}</button>`;
+      <button class="btn primary big" id="rq-send" ${ready() && !s.busy ? "" : "disabled"}>${s.busy ? "Enviando…" : `Pedir corte para ${esc(weekLabel(s.week, weeks))}`}</button>`;
   }
   el.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
@@ -133,6 +134,7 @@ function requestForm(el, { needContact, weeks, onDone }) {
     } else return;
     draw();
   });
+  el.addEventListener("toggle", (e) => { if (e.target.matches("details.more")) s.more = e.target.open; }, true);
   el.addEventListener("input", (e) => {
     const t = e.target;
     if (t.id === "rq-note") s.note = t.value;
@@ -144,19 +146,8 @@ function requestForm(el, { needContact, weeks, onDone }) {
 }
 
 const requestMsg = (b, who, weeks) =>
-  `Ey Cabezas 💈 Quiero cortarme ${weekLabel(b.week, weeks)} (${prefLabel(b.pref).toLowerCase()}).\n✂️ ${b.style}` + (b.note ? `\n📝 ${b.note}` : "") + `\nSoy ${who}. Pásame huecos 🙏`;
-
-function requestSent(el, { b, who, settings, weeks, back }) {
-  el.innerHTML = `
-    <div class="state hot">
-      <span class="eyebrow">Pedido para ${esc(weekLabel(b.week, weeks))}</span>
-      <h2>¡Hecho! Ahora dale un toque a Cabezas.</h2>
-      <p>Te pasará sus huecos libres por WhatsApp y tú pillas el que te venga.</p>
-      ${settings.adminPhone ? `<a class="btn wa" href="${wa(settings.adminPhone, requestMsg(b, who, weeks))}" target="_blank" rel="noopener">${ICON.wa} Avisar a Cabezas</a>` : ""}
-    </div>
-    ${back ? `<a class="btn ghost" href="${back}">Volver a mi zona</a>` : ""}`;
-  window.scrollTo(0, 0);
-}
+  `Ey Cabezas 💈 Quiero cortarme ${weekLabel(b.week, weeks)}` + (b.pref && b.pref !== "igual" ? ` (${prefLabel(b.pref).toLowerCase()})` : "") +
+  `.\n✂️ ${b.style}` + (b.note ? `\n📝 ${b.note}` : "") + `\nSoy ${who}. Pásame horas 🙏`;
 
 function reviewsBlock(reviews) {
   if (!reviews.count) return `<div class="section"><h2>Reseñas</h2><p class="empty">Todavía nadie ha opinado. Estrénalas tú después de tu corte.</p></div>`;
@@ -174,29 +165,30 @@ function reviewsBlock(reviews) {
 async function landing() {
   $("#roleTag").textContent = "";
   const saved = store.get(LS_TOKEN);
+  if (saved && !new URLSearchParams(location.search).has("nuevo")) { location.replace("/c/" + encodeURIComponent(saved)); return; }
   const data = await api("public");
   const s = data.settings;
   app.innerHTML = `
-    ${saved ? `<a class="btn ghost" href="/c/${esc(saved)}">Ir a mi zona (bono y citas)</a>` : ""}
     <div class="hero"><div class="grow">
       <h1>Pilla tu <em>corte</em>.</h1>
-      <p class="lead">Dile a Cabezas qué semana te viene bien y te pasa sus huecos por WhatsApp.</p></div>
+      <p class="lead">Dinos qué semana te viene bien. Cabezas te pasa las horas libres por WhatsApp y eliges una.</p></div>
       <div class="hero-logo" aria-hidden="true"><img src="/logo.svg" alt=""></div></div>
+    <div class="state"><h2>Pide tu corte</h2><div id="rq"></div></div>
     <div class="bono">
       <div class="top"><div><div class="eyebrow" style="color:#C9D2EA">Bono</div>
         <div class="big">${s.cutsPerBono}<small>cortes</small></div>
         <div class="sub">${s.bonoPrice} € · sale a ${(s.bonoPrice / s.cutsPerBono).toFixed(0)} € el corte. Suelto: ${s.loosePrice} €</div></div>
         <span class="sticker">Pídeselo a Cabezas</span></div>
     </div>
-    <div class="section"><h2>Pide tu corte</h2><div id="rq"></div></div>
     ${installCard("Así pides corte en dos toques.")}
     ${reviewsBlock(data.reviews)}
     <footer class="foot">CabezApp · degradados de calle desde el salón de casa.<br>No nos hacemos responsables de dibujos en la nuca.</footer>`;
   requestForm($("#rq"), {
     needContact: true, weeks: data.weeks,
     onDone: async (b) => {
-      await api("request", { method: "POST", body: b });
-      requestSent(app, { b, who: b.name.trim(), settings: s, weeks: data.weeks });
+      const r = await api("request", { method: "POST", body: b });
+      store.set(LS_TOKEN, r.token);
+      location.href = "/c/" + encodeURIComponent(r.token);
     },
   });
 }
@@ -232,41 +224,46 @@ function punchCard(me, settings) {
 
 let personalWired = false, myStars = 0, pickSel = null, currentToken = null;
 
-function openBlock(c, me, settings, weeks) {
+function progress(step) {
+  const steps = ["Pedido", "Eliges hora", "Confirmada"];
+  return `<ol class="progress" aria-label="Paso ${step} de 3">${steps.map((l, i) => `<li class="${i + 1 < step ? "done" : i + 1 === step ? "on" : ""}"><span>${i + 1 < step ? "✓" : i + 1}</span>${l}</li>`).join("")}</ol>`;
+}
+
+// The one card that says where your appointment is
+function statusBlock(c, me, settings, weeks) {
+  if (!c) {
+    return `<section class="state"><span class="eyebrow">Tu cita</span><h2>No tienes cita. ¿Toca corte?</h2><div id="rq"></div></section>`;
+  }
   const wl = weekLabel(c.week, weeks);
+  const toCabezas = (text, label) => settings.adminPhone ? `<a class="btn wa" href="${wa(settings.adminPhone, text)}" target="_blank" rel="noopener">${ICON.wa} ${label}</a>` : "";
   if (c.status === "pedida") {
-    return `<div class="state"><span class="eyebrow">Pedido · ${esc(wl)}</span>
-      <h2>Esperando huecos de Cabezas</h2>
-      <p class="muted">Te los pasa por WhatsApp. ${esc(prefLabel(c.pref))} · ${esc(c.style)}.</p>
-      <div class="row"><button class="btn ghost sm" data-cancel="${c.id}">Cancelar pedido</button></div></div>`;
+    return `<section class="state"><span class="eyebrow">Tu cita</span>${progress(1)}
+      <h2>Pedido enviado para ${esc(wl)}</h2>
+      <p>Ahora Cabezas te pasa las horas libres por WhatsApp. Cuando te lleguen, entra aquí y elige una.</p>
+      ${toCabezas(requestMsg(c, me.name, weeks), "Avisar a Cabezas")}
+      <button class="linkbtn" data-cancel="${c.id}">Cancelar pedido</button></section>`;
   }
   if (c.status === "huecos") {
     if (!c.offer.length) {
-      return `<div class="state"><span class="eyebrow">${esc(wl)}</span><h2>Se han pillado todos los huecos</h2>
-        <p class="muted">Pídele a Cabezas que te pase más.</p>
-        ${settings.adminPhone ? `<a class="btn wa" href="${wa(settings.adminPhone, `Ey Cabezas, se han pillado todos los huecos que me pasaste 😅 ¿Me pasas más para ${wl}?`)}" target="_blank" rel="noopener">${ICON.wa} Pedir más huecos</a>` : ""}</div>`;
+      return `<section class="state"><span class="eyebrow">Tu cita</span>${progress(2)}<h2>Se han pillado todas las horas</h2>
+        <p>Pídele a Cabezas que te pase más.</p>
+        ${toCabezas(`Ey Cabezas, se han pillado todas las horas que me pasaste 😅 ¿Me pasas más para ${wl}?`, "Pedir más horas")}</section>`;
     }
     const byDay = {};
     c.offer.forEach((s) => (byDay[s.slice(0, 8)] = byDay[s.slice(0, 8)] || []).push(s));
-    return `<div class="state hot"><span class="eyebrow">Huecos para ${esc(wl)}</span>
-      <h2>Cabezas te ha pasado huecos. Pilla uno.</h2>
+    return `<section class="state hot"><span class="eyebrow">Tu cita</span>${progress(2)}
+      <h2>Elige tu hora</h2>
       ${Object.keys(byDay).sort().map((d) => `<div class="slotday"><h3>${esc(dayName(d))}</h3>
         <div class="hours">${byDay[d].map((s) => `<button class="chip${pickSel === s ? " on" : ""}" data-pick="${s}" aria-pressed="${pickSel === s}">${hm(s.slice(8))}</button>`).join("")}</div></div>`).join("")}
-      <button class="btn primary" id="pick-go" data-id="${c.id}" ${pickSel ? "" : "disabled"}>${pickSel ? `Pillar ${esc(dayName(pickSel.slice(0, 8)).toLowerCase())} a las ${hm(pickSel.slice(8))}` : "Elige un hueco"}</button>
-      <p class="muted small">El primero que lo pilla se lo queda.</p></div>`;
+      <button class="btn primary big" id="pick-go" data-id="${c.id}" ${pickSel ? "" : "disabled"}>${pickSel ? `Quiero el ${esc(dayName(pickSel.slice(0, 8)).toLowerCase())} a las ${hm(pickSel.slice(8))}` : "Toca una hora"}</button>
+      <p class="muted small">El primero que la elige se la queda.</p></section>`;
   }
-  // confirmada
-  return `<div class="ticket">
-    <div class="t1"><span class="eyebrow">Corte confirmado</span>
-      <div class="bigt">${hm(c.h)}</div><div class="when">${esc(longDay(c.d))}</div></div>
-    <div class="perf"></div>
-    <div class="t2"><div><span>Cliente</span><b>${esc(me.name)}</b></div><div><span>Corte</span><b>${esc(c.style)}</b></div>
-      <div style="grid-column:1/-1"><span>Bono</span><b>${me.remaining > 0 ? `Gastas 1 de los ${me.remaining} que te quedan` : `Sin bono: ${settings.loosePrice} €`}</b></div></div>
-  </div>
-  ${settings.confirmText ? `<p class="disclaimer">${esc(settings.confirmText)}</p>` : ""}
-  <div class="row">
-    ${settings.adminPhone ? `<a class="btn wa" href="${wa(settings.adminPhone, `Pillado ✂️ ${longDay(c.d)} a las ${hm(c.h)}. Nos vemos, crack.`)}" target="_blank" rel="noopener">${ICON.wa} Avisar a Cabezas</a>` : ""}
-    <button class="btn ghost" data-cancel="${c.id}">Cancelar</button></div>`;
+  return `<section class="state ok"><span class="eyebrow">Tu cita</span>${progress(3)}
+    <div class="appt"><div class="bigt">${hm(c.h)}</div><div class="when">${esc(longDay(c.d))}</div>
+    <div class="muted">${esc(c.style)} · ${me.remaining > 0 ? `del bono (te quedan ${me.remaining})` : `${settings.loosePrice} € suelto`}</div></div>
+    ${settings.confirmText ? `<p class="disclaimer">${esc(settings.confirmText)}</p>` : ""}
+    ${toCabezas(`Pillado ✂️ ${longDay(c.d)} a las ${hm(c.h)}. Nos vemos, crack.`, "Avisar a Cabezas")}
+    <button class="linkbtn" data-cancel="${c.id}">Cancelar cita</button></section>`;
 }
 
 async function personal(token) {
@@ -276,7 +273,7 @@ async function personal(token) {
   try { data = await api("me?t=" + encodeURIComponent(token)); }
   catch (e) {
     if (e.status === 404) store.del(LS_TOKEN);
-    app.innerHTML = `<div><h1>Enlace <em>roto</em>.</h1><p class="lead">${esc(e.message)}</p></div><a class="btn primary" href="/">Pedir corte igualmente</a>`;
+    app.innerHTML = `<div><h1>Enlace <em>roto</em>.</h1><p class="lead">${esc(e.message)}</p></div><a class="btn primary" href="/?nuevo">Pedir corte igualmente</a>`;
     return;
   }
   store.set(LS_TOKEN, token);
@@ -288,11 +285,10 @@ async function personal(token) {
   if (open && open.status === "huecos" && pickSel && !open.offer.includes(pickSel)) pickSel = null;
 
   app.innerHTML = `
-    <div class="hero"><div class="grow"><h1>¿Qué pasa, <em>${esc(firstName(me.name))}</em>?</h1>
-    <p class="lead">${open ? "Tienes un corte en marcha." : "¿Toca corte? Pídelo aquí."}</p></div></div>
-    ${open ? openBlock(open, me, settings, weeks) : `<div class="section"><h2>Pide tu corte</h2><div id="rq"></div></div>`}
+    <h1>¿Qué pasa, <em>${esc(firstName(me.name))}</em>?</h1>
+    ${statusBlock(open, me, settings, weeks)}
     ${punchCard(me, settings)}
-    ${installCard("Tu bono y tus cortes, siempre a mano.")}
+    ${installCard("Tu cita y tu bono, siempre a mano.")}
     <div class="section">
       <h2>${r ? "Tu reseña" : "Ponle nota a Cabezas"}</h2>
       <div class="card">
@@ -305,14 +301,15 @@ async function personal(token) {
     ${history.length ? `<div class="section"><h2>Tus cortes</h2><div class="list">${history.map((c) => `
       <div class="item"><div class="item-row"><div class="grow"><b>${esc(shortDay(c.d))}</b> · ${esc(c.style)}</div>
       <span class="muted small">${c.loose ? "Suelto" : "Del bono"}</span></div></div>`).join("")}</div></div>` : ""}
-    <footer class="foot">Este enlace es solo tuyo. No se lo pases a nadie (o te gastan el bono).</footer>`;
+    <footer class="foot">Este enlace es solo tuyo. ¿No eres ${esc(firstName(me.name))}? <button class="linkbtn" data-notme="1">Pedir con otro nombre</button></footer>`;
 
   if (!open) {
     requestForm($("#rq"), {
       needContact: false, weeks,
       onDone: async (b) => {
         await api("request", { method: "POST", body: { ...b, t: token } });
-        requestSent(app, { b, who: me.name, settings, weeks, back: "/c/" + encodeURIComponent(token) });
+        toast("Pedido enviado");
+        personal(token); window.scrollTo(0, 0);
       },
     });
   }
@@ -323,14 +320,15 @@ async function personal(token) {
     const b = e.target.closest("button");
     if (!b || route() !== "client") return;
     const t = currentToken;
-    if (b.dataset.star) {
+    if (b.dataset.notme) { store.del(LS_TOKEN); location.href = "/?nuevo"; }
+    else if (b.dataset.star) {
       myStars = +b.dataset.star;
       $("#starpick").querySelectorAll("button").forEach((x) => x.classList.toggle("on", +x.dataset.star <= myStars));
     } else if (b.dataset.pick) {
       pickSel = b.dataset.pick; personal(t);
     } else if (b.id === "pick-go") {
-      b.disabled = true; b.textContent = "Pillando…";
-      try { await api("pick", { method: "POST", body: { t, id: b.dataset.id, slot: pickSel } }); pickSel = null; toast("¡Pillado! Corte confirmado"); }
+      b.disabled = true; b.textContent = "Reservando…";
+      try { await api("pick", { method: "POST", body: { t, id: b.dataset.id, slot: pickSel } }); pickSel = null; toast("¡Cita confirmada!"); }
       catch (err) { toast(err.message, true); pickSel = null; }
       personal(t); window.scrollTo(0, 0);
     } else if (b.id === "rv-send") {
@@ -339,7 +337,7 @@ async function personal(token) {
       try { await api("review", { method: "POST", body: { t, stars: myStars, text: $("#rv-text").value } }); toast("Reseña publicada"); personal(t); }
       catch (err) { toast(err.message, true); b.disabled = false; }
     } else if (b.dataset.cancel) {
-      if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Toca otra vez para cancelar"; b.classList.add("danger"); return; }
+      if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Toca otra vez para cancelar"; return; }
       try { await api("cancel", { method: "POST", body: { t, id: b.dataset.cancel } }); toast("Cancelado"); personal(t); }
       catch (err) { toast(err.message, true); }
     }
@@ -578,6 +576,10 @@ function clientCard(c, s) {
       ${c.bonos.length ? `<div class="muted small">Bonos: ${c.bonos.map((b) => `${new Date(b.date).toLocaleDateString("es-ES", { day: "numeric", month: "short" })} (${b.price} €) <button class="linkbtn" data-cact="remove-bono" data-id="${c.id}" data-bono="${b.id}">quitar</button>`).join(" · ")}</div>` : ""}
       <div class="grid2"><div><label class="fl" for="en-${c.id}">Nombre</label><input class="field" id="en-${c.id}" value="${esc(c.name)}" maxlength="40"></div>
       <div><label class="fl" for="ep-${c.id}">Móvil</label><input class="field" id="ep-${c.id}" type="tel" value="${esc(c.phone)}"></div></div>
+      ${A.db.clients.length > 1 ? `<div><label class="fl" for="mg-${c.id}">¿Es la misma persona que otro cliente?</label>
+        <div class="row"><select class="field" id="mg-${c.id}" style="flex:2 1 160px"><option value="">Elige con quién unirlo…</option>${A.db.clients.filter((x) => x.id !== c.id).sort((a, b) => a.name.localeCompare(b.name, "es")).map((x) => `<option value="${x.id}">${esc(x.name)}${x.phone ? " · …" + esc(x.phone.slice(-3)) : ""}</option>`).join("")}</select>
+        <button class="btn ghost sm" data-cact="merge" data-id="${c.id}">Unir</button></div>
+        <p class="muted small" style="margin:4px 0 0">Sus pedidos, bonos y reseña pasan al elegido, y esta ficha se borra.</p></div>` : ""}
       <div class="row"><button class="btn ghost sm" data-cact="edit-client" data-id="${c.id}">Guardar datos</button>
       <button class="btn danger sm" data-cact="delete-client" data-id="${c.id}">Borrar cliente</button></div>
     </div></details>`;
@@ -672,10 +674,16 @@ function wireAdmin() {
       if (ds.cact === "remove-bono") body.bonoId = ds.bono;
       if (ds.cact === "edit-client") body = { id: ds.id, name: $("#en-" + ds.id).value, phone: $("#ep-" + ds.id).value };
       if (ds.cact === "delete-client" && ds.sure !== "1") { ds.sure = "1"; t.textContent = "Se borra todo. ¿Seguro?"; return; }
+      if (ds.cact === "merge") {
+        body.into = $("#mg-" + ds.id).value;
+        if (!body.into) return toast("Elige con quién unirlo", true);
+        if (ds.sure !== "1") { ds.sure = "1"; t.textContent = "¿Seguro? Toca otra vez"; return; }
+      }
       try {
         await adminCall(ds.cact, body);
         if (ds.cact === "delete-client") A.openClient = null;
-        toast({ "add-bono": "Bono añadido", adjust: "Bono ajustado", "edit-client": "Guardado", "delete-client": "Cliente borrado", "remove-bono": "Bono quitado" }[ds.cact]);
+        if (ds.cact === "merge") A.openClient = body.into;
+        toast({ "add-bono": "Bono añadido", adjust: "Bono ajustado", "edit-client": "Guardado", "delete-client": "Cliente borrado", "remove-bono": "Bono quitado", merge: "Clientes unidos" }[ds.cact]);
         drawAdmin();
       } catch {}
       return;

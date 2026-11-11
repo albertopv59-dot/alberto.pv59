@@ -258,3 +258,25 @@ footer.foot { color: var(--muted); font-size: 12px; text-align: center; padding-
 .offerbox { display: flex; flex-direction: column; gap: 8px; }
 .chip.sel { background: var(--blue); border-color: var(--blue); color: #fff; }
 #rq { display: flex; flex-direction: column; gap: 22px; }
+
+/* v3: simpler client flow */
+.btn.big { padding: 17px 18px; font-size: 17px; border-radius: 16px; }
+.state h2 { margin: 0; }
+.progress { list-style: none; margin: 2px 0 4px; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.progress li { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; font-weight: 700; color: var(--muted); text-align: center; position: relative; }
+.progress li span { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); border: 2px solid var(--line); font-weight: 800; font-size: 14px; color: var(--muted); }
+.progress li.done span { background: var(--ok); border-color: var(--ok); color: #05210F; }
+.progress li.on { color: var(--ink); }
+.progress li.on span { background: var(--red); border-color: var(--red); color: #fff; }
+.state.ok { border-color: rgba(47,210,126,.45); background: linear-gradient(135deg, rgba(47,210,126,.12), rgba(91,134,255,.08)); }
+.appt { display: flex; flex-direction: column; gap: 2px; }
+.appt .bigt { font-family: var(--f-display); font-weight: 800; font-size: 64px; line-height: .95; letter-spacing: -.04em; color: var(--ok); font-variant-numeric: tabular-nums; }
+.appt .when { font-size: 20px; font-weight: 800; }
+details.more { border: 1px solid var(--line); border-radius: 14px; padding: 0 14px; }
+details.more > summary { cursor: pointer; padding: 12px 0; font-weight: 700; color: var(--muted); }
+details.more .more-body { display: flex; flex-direction: column; gap: 14px; padding-bottom: 14px; }
+select.field { appearance: auto; }
+.state .linkbtn { align-self: flex-start; }
+.foot .linkbtn { font-size: 12px; }
+#rq { gap: 14px; }
+.card.install { flex-direction: row; }
