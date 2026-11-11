@@ -30,6 +30,7 @@ const json = (data, status = 200, extra = {}) =>
   });
 const bad = (msg, status = 400) => json({ error: msg }, status);
 const id = (n = 6) => crypto.randomBytes(n).toString("base64url");
+const newPin = () => String(crypto.randomInt(0, 10000)).padStart(4, "0");
 const clean = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
 
 // ---------- dates (always Madrid time) ----------
@@ -86,6 +87,8 @@ function clientView(db, c) {
   return {
     name: c.name,
     nick: c.nick || "",
+    phone: c.phone ? "…" + c.phone.slice(-3) : "",
+    pin: c.pin || "",
     total: totalCuts(c),
     used: c.used,
     remaining: remaining(c),
@@ -160,6 +163,28 @@ export default async (req) => {
     return json({ settings: publicSettings(db), reviews: publicReviews(db), weeks: weeks() });
   }
 
+  // Log in from the app with phone + PIN; 5 wrong tries lock that client for 15 minutes
+  if (path === "login" && req.method === "POST") {
+    const phone = normPhone(body.phone), pin = String(body.pin || "").replace(/\D/g, "");
+    if (!phone || pin.length !== 4) return bad("Pon tu móvil y tu PIN de 4 cifras");
+    let token = null, error = null;
+    const out = await mutate(store, (db) => {
+      const c = db.clients.find((x) => x.phone === phone);
+      if (!c || !c.pin) { error = "Móvil o PIN incorrectos"; return; }
+      const now = Date.now();
+      if (c.lockUntil && c.lockUntil > now) { error = "Demasiados intentos. Espera un cuarto de hora o pídele el PIN a Cabezas."; return { error, status: 429 }; }
+      if (c.pin !== pin) {
+        c.fails = (c.fails || 0) + 1;
+        if (c.fails >= 5) { c.lockUntil = now + 15 * 60 * 1000; c.fails = 0; }
+        error = "Móvil o PIN incorrectos"; return;
+      }
+      c.fails = 0; delete c.lockUntil; token = c.token;
+    });
+    if (out.error) return bad(out.error, out.status || 400);
+    if (error) return bad(error, 401);
+    return json({ ok: true, token });
+  }
+
   if (path === "me" && req.method === "GET") {
     const { db } = await load(store);
     const c = db.clients.find((x) => x.token === url.searchParams.get("t"));
@@ -183,7 +208,7 @@ export default async (req) => {
         if (!phone) return { error: "Pon un móvil válido (ej. 600 123 456)" };
         c = db.clients.find((x) => x.phone === phone);
         if (!c) {
-          c = { id: id(), token: id(9), name, nick: clean(body.nick, 30), phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
+          c = { id: id(), token: id(9), pin: newPin(), name, nick: clean(body.nick, 30), phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
           db.clients.push(c);
         }
       }
@@ -252,7 +277,11 @@ export default async (req) => {
       weeks: weeks(),
     });
     if (path === "admin" && req.method === "GET") {
-      const { db } = await load(store);
+      let { db } = await load(store);
+      if (db.clients.some((c) => !c.pin)) {
+        const r = await mutate(store, (d) => { d.clients.forEach((c) => { if (!c.pin) c.pin = newPin(); }); });
+        if (r.db) db = r.db;
+      }
       return json(adminView(db));
     }
 
@@ -312,7 +341,7 @@ export default async (req) => {
           if (phone && db.clients.some((x) => x.phone === phone)) return { error: "Ya hay un cliente con ese móvil" };
           const cuts = Math.round(Number(body.cuts) || 0);
           if (cuts < 0 || cuts > 50) return { error: "Entre 0 y 50 cortes" };
-          const c = { id: id(), token: id(9), name, nick: clean(body.nick, 30), phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
+          const c = { id: id(), token: id(9), pin: newPin(), name, nick: clean(body.nick, 30), phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
           if (cuts) c.bonos.push({ id: id(), date: new Date().toISOString(), cuts, price: 0, kind: "previos" });
           db.clients.push(c);
           return { client: c };
@@ -328,6 +357,14 @@ export default async (req) => {
             if (p && db.clients.some((x) => x.phone === p && x.id !== c.id)) return { error: "Ese móvil ya es de otro cliente" };
             c.phone = p;
           }
+          return;
+        }
+        case "new-pin": {
+          const c = client(body.id);
+          if (!c) return { error: "Cliente no encontrado" };
+          const want = String(body.pin || "").replace(/\D/g, "");
+          if (body.pin && want.length !== 4) return { error: "El PIN son 4 cifras" };
+          c.pin = want || newPin(); c.fails = 0; delete c.lockUntil;
           return;
         }
         case "add-cuts": {

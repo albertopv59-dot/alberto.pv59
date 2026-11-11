@@ -110,7 +110,7 @@ function requestForm(el, { needContact, weeks, onDone }) {
         <button class="wbtn${s.week === weeks[k] ? " on" : ""}" data-week="${weeks[k]}" aria-pressed="${s.week === weeks[k]}"><b>${l}</b><span>${esc(weekRange(weeks[k]))}</span></button>`).join("")}
       </div>
       ${needContact ? `<div class="grid2">
-          <div><label class="fl" for="rq-name">Tu nombre</label><input class="field" id="rq-name" autocomplete="given-name" maxlength="40" value="${esc(s.name)}" placeholder="Nombre o mote"></div>
+          <div><label class="fl" for="rq-name">Tu nombre</label><input class="field" id="rq-name" autocomplete="given-name" maxlength="40" value="${esc(s.name)}" placeholder="Nombre y apellido"></div>
           <div><label class="fl" for="rq-nick">Tu mote <span class="muted">(opcional)</span></label><input class="field" id="rq-nick" maxlength="30" value="${esc(s.nick)}" placeholder="Como te llaman"></div>
           <div><label class="fl" for="rq-phone">Tu móvil</label><input class="field" id="rq-phone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(s.phone)}" placeholder="600 123 456"></div>
         </div>` : ""}
@@ -178,7 +178,15 @@ async function landing() {
       <h1>Pilla tu <em>corte</em>.</h1>
       <p class="lead">Dinos qué semana te viene bien. Cabezas te pasa las horas libres por WhatsApp y eliges una.</p></div>
       <div class="hero-logo" aria-hidden="true"><img src="/logo.svg" alt=""></div></div>
-    <div class="state"><h2>Pide tu corte</h2><div id="rq"></div></div>
+    <form class="state" id="login"><h2>¿Ya eres cliente? Entra</h2>
+      <div class="grid2">
+        <div><label class="fl" for="lg-phone">Tu móvil</label><input class="field" id="lg-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="600 123 456" required></div>
+        <div><label class="fl" for="lg-pin">Tu PIN</label><input class="field pin-in" id="lg-pin" inputmode="numeric" autocomplete="current-password" maxlength="4" placeholder="····" required></div>
+      </div>
+      <p class="err" id="lg-err" hidden></p>
+      <button class="btn primary big" id="lg-go">Entrar</button>
+      <p class="muted small">El PIN te lo da Cabezas. ¿No lo tienes? Pídeselo.</p></form>
+    <div class="state"><h2>¿Primera vez? Pide tu corte</h2><div id="rq"></div></div>
     <div class="bono">
       <div class="top"><div><div class="eyebrow" style="color:#C9D2EA">Bono</div>
         <div class="big">${s.cutsPerBono}<small>cortes</small></div>
@@ -188,6 +196,16 @@ async function landing() {
     ${installCard("Así pides corte en dos toques.")}
     ${reviewsBlock(data.reviews)}
     <footer class="foot">CabezApp · degradados de calle desde el salón de casa.<br>No nos hacemos responsables de dibujos en la nuca.</footer>`;
+  $("#login").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = $("#lg-err"), btn = $("#lg-go");
+    err.hidden = true; btn.disabled = true; btn.textContent = "Entrando…";
+    try {
+      const r = await api("login", { method: "POST", body: { phone: $("#lg-phone").value, pin: $("#lg-pin").value } });
+      store.set(LS_TOKEN, r.token);
+      location.href = "/c/" + encodeURIComponent(r.token);
+    } catch (x) { err.textContent = x.message; err.hidden = false; btn.disabled = false; btn.textContent = "Entrar"; }
+  });
   requestForm($("#rq"), {
     needContact: true, weeks: data.weeks,
     onDone: async (b) => {
@@ -306,7 +324,10 @@ async function personal(token) {
     ${history.length ? `<div class="section"><h2>Tus cortes</h2><div class="list">${history.map((c) => `
       <div class="item"><div class="item-row"><div class="grow"><b>${esc(shortDay(c.d))}</b> · ${esc(c.style)}</div>
       <span class="muted small">${c.loose ? "Suelto" : "Del bono"}</span></div></div>`).join("")}</div></div>` : ""}
-    <footer class="foot">Este enlace es solo tuyo. ¿No eres ${esc(callName(me))}? <button class="linkbtn" data-notme="1">Pedir con otro nombre</button></footer>`;
+    ${me.pin ? `<div class="card"><b>Tus datos para entrar en la app</b>
+      <div class="creds"><div><span class="eyebrow">Móvil</span><b>${esc(me.phone)}</b></div><div><span class="eyebrow">PIN</span><b class="pin">${esc(me.pin)}</b></div></div>
+      <p class="muted small" style="margin:0">Si cambias de móvil o borras la app, entras con tu móvil y este PIN.</p></div>` : ""}
+    <footer class="foot"><button class="linkbtn" data-notme="1">Cerrar sesión</button></footer>`;
 
   if (!open) {
     requestForm($("#rq"), {
@@ -369,7 +390,7 @@ function confirmMsg(c, cl, s) {
   const joke = JOKES[[...c.id].reduce((a, ch) => a + ch.charCodeAt(0), 0) % JOKES.length];
   return `💈 ¡${callName(cl)}, tienes corte, máquina!\n\n📅 ${longDay(c.d)} a las ${hm(c.h)}\n✂️ ${c.style}\n\n${joke}\n\n⚠️ ${s.confirmText}\n\nTu cita, aquí:\n${personalLink(cl.token)}`;
 }
-const linkMsg = (cl) => `Ey ${callName(cl)}! 💈 Esta es tu zona de CabezApp: pides corte, ves cuántos te quedan del bono y me dejas reseña. Es solo tuya, guárdala o instálala como app:\n${personalLink(cl.token)}`;
+const linkMsg = (cl) => `Ey ${callName(cl)}! 💈 Ya estás en CabezApp: pides corte, ves cuántos te quedan y me dejas reseña.\n\nTu zona (instálala como app):\n${personalLink(cl.token)}\n\nPara entrar desde la app: tu móvil y el PIN ${cl.pin} 🔐`;
 const doneMsg = (cl, left) => `Corte hecho ✂️ ${left > 0 ? `Te ${left === 1 ? "queda" : "quedan"} ${left} ${left === 1 ? "corte" : "cortes"} del bono.` : "Bono fundido, toca renovar 🫡"}\nSi te ha gustado (o no), déjame reseña:\n${personalLink(cl.token)}`;
 const bonoMsg = (cl, s) => `Bono cargado 🎟️ Tienes ${cl.remaining + s.cutsPerBono} cortes por delante. A lucir cabeza. Míralo aquí:\n${personalLink(cl.token)}`;
 
@@ -584,6 +605,10 @@ function clientCard(c, s) {
         <div class="row addcuts"><input class="field" id="ac-${c.id}" type="number" inputmode="numeric" min="1" max="50" value="1" aria-label="Cortes">
         <input class="field" id="ap-${c.id}" type="number" inputmode="decimal" min="0" step="0.5" placeholder="€" aria-label="Pagado (opcional)">
         <button class="btn ok sm" data-cact="add-cuts" data-id="${c.id}">Añadir</button></div></div>
+      <div><span class="eyebrow">Su PIN para entrar en la app</span>
+        <div class="row addcuts"><b class="pin">${esc(c.pin || "—")}</b>
+        <input class="field" id="pp-${c.id}" inputmode="numeric" maxlength="4" placeholder="Otro (opcional)" aria-label="PIN nuevo">
+        <button class="btn ghost sm" data-cact="new-pin" data-id="${c.id}">Cambiar PIN</button></div></div>
       <div><span class="eyebrow">Su enlace personal</span><div class="copybox">${esc(link)}</div></div>
       <div class="row">
         ${c.phone ? `<a class="btn wa sm" href="${wa(c.phone, linkMsg(c))}" target="_blank" rel="noopener">${ICON.wa} Mandarle su enlace</a>` : ""}
@@ -690,6 +715,7 @@ function wireAdmin() {
       if (ds.cact === "adjust") body.delta = +ds.delta;
       if (ds.cact === "remove-bono") body.bonoId = ds.bono;
       if (ds.cact === "edit-client") body = { id: ds.id, name: $("#en-" + ds.id).value, nick: $("#ek-" + ds.id).value, phone: $("#ep-" + ds.id).value };
+      if (ds.cact === "new-pin") body = { id: ds.id, pin: $("#pp-" + ds.id).value };
       if (ds.cact === "add-cuts") body = { id: ds.id, cuts: $("#ac-" + ds.id).value, price: $("#ap-" + ds.id).value };
       if (ds.cact === "delete-client" && ds.sure !== "1") { ds.sure = "1"; t.textContent = "Se borra todo. ¿Seguro?"; return; }
       if (ds.cact === "merge") {
@@ -701,7 +727,7 @@ function wireAdmin() {
         await adminCall(ds.cact, body);
         if (ds.cact === "delete-client") A.openClient = null;
         if (ds.cact === "merge") A.openClient = body.into;
-        toast({ "add-bono": "Bono añadido", adjust: "Apuntado", "edit-client": "Guardado", "delete-client": "Cliente borrado", "remove-bono": "Quitado", merge: "Clientes unidos", "add-cuts": "Cortes añadidos" }[ds.cact]);
+        toast({ "add-bono": "Bono añadido", adjust: "Apuntado", "edit-client": "Guardado", "delete-client": "Cliente borrado", "remove-bono": "Quitado", merge: "Clientes unidos", "add-cuts": "Cortes añadidos", "new-pin": "PIN cambiado" }[ds.cact]);
         drawAdmin();
       } catch {}
       return;
@@ -718,7 +744,7 @@ function wireAdmin() {
     try {
       const r = await adminCall("add-client", { name: $("#nc-name").value, nick: $("#nc-nick").value, phone: $("#nc-phone").value, cuts: $("#nc-cuts").value });
       A.openClient = r.result.client.id;
-      toast("Cliente añadido. Mándale su enlace.");
+      toast("Cliente añadido. Mándale su enlace y su PIN.");
       drawAdmin();
     } catch {}
   });
