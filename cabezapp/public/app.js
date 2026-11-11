@@ -260,7 +260,7 @@ function statusBlock(c, me, settings, weeks) {
   }
   return `<section class="state ok"><span class="eyebrow">Tu cita</span>${progress(3)}
     <div class="appt"><div class="bigt">${hm(c.h)}</div><div class="when">${esc(longDay(c.d))}</div>
-    <div class="muted">${esc(c.style)} · ${me.remaining > 0 ? `del bono (te quedan ${me.remaining})` : `${settings.loosePrice} € suelto`}</div></div>
+    <div class="muted">${esc(c.style)}</div></div>
     ${settings.confirmText ? `<p class="disclaimer">${esc(settings.confirmText)}</p>` : ""}
     ${toCabezas(`Pillado ✂️ ${longDay(c.d)} a las ${hm(c.h)}. Nos vemos, crack.`, "Avisar a Cabezas")}
     <button class="linkbtn" data-cancel="${c.id}">Cancelar cita</button></section>`;
@@ -352,16 +352,21 @@ const A = { db: null, tab: "peticiones", week: 0, openClient: null, sel: {} };
 const offerMsg = (c, cl, slots) =>
   `Ey ${firstName(cl.name)} 💈 Huecos para cortarte ${weekLabel(c.week, A.db.weeks)}:\n${slots.map((s) => "• " + slotTxt(s)).join("\n")}\n\nPilla el tuyo aquí antes de que vuele 👇\n${personalLink(cl.token)}`;
 const rejectMsg = (c, cl) => `Ey ${firstName(cl.name)}, ${weekLabel(c.week, A.db.weeks)} imposible 😩 Pídemelo para otra semana aquí:\n${personalLink(cl.token)}`;
+// Confirmation WhatsApp: no prices, just "tienes corte" and a bit of cachondeo
+const JOKES = [
+  "Ven con la cabeza lavada, que esto es una barbería seria (más o menos).",
+  "Puntualidad, crack. La maquinilla no espera a nadie.",
+  "Si llegas tarde, el degradado lo hago con los ojos cerrados.",
+  "Tú trae la cabeza, que el arte lo pongo yo.",
+  "Si te rajas, la próxima vez te rapo al cero sin preguntar.",
+];
 function confirmMsg(c, cl, s) {
-  const left = cl.remaining;
-  const bono = left > 0
-    ? `🎟️ Bono: te quedan ${left} ${left === 1 ? "corte" : "cortes"} (contando este)`
-    : `🎟️ Sin bono: este corte son ${s.loosePrice} €. Bono de ${s.cutsPerBono} por ${s.bonoPrice} €, tú verás.`;
-  return `✅ Corte CONFIRMADO en CabezApp 💈\n📅 ${longDay(c.d)} a las ${hm(c.h)}\n✂️ ${c.style}\n${bono}\n\n⚠️ ${s.confirmText}\n\nTu zona:\n${personalLink(cl.token)}`;
+  const joke = JOKES[[...c.id].reduce((a, ch) => a + ch.charCodeAt(0), 0) % JOKES.length];
+  return `💈 ¡${firstName(cl.name)}, tienes corte, máquina!\n\n📅 ${longDay(c.d)} a las ${hm(c.h)}\n✂️ ${c.style}\n\n${joke}\n\n⚠️ ${s.confirmText}\n\nTu cita, aquí:\n${personalLink(cl.token)}`;
 }
 const linkMsg = (cl) => `Ey ${firstName(cl.name)}! 💈 Esta es tu zona de CabezApp: pides corte, ves cuántos te quedan del bono y me dejas reseña. Es solo tuya, guárdala o instálala como app:\n${personalLink(cl.token)}`;
 const doneMsg = (cl, left) => `Corte hecho ✂️ ${left > 0 ? `Te ${left === 1 ? "queda" : "quedan"} ${left} ${left === 1 ? "corte" : "cortes"} del bono.` : "Bono fundido, toca renovar 🫡"}\nSi te ha gustado (o no), déjame reseña:\n${personalLink(cl.token)}`;
-const bonoMsg = (cl, s) => `Bono cargado 🎟️ ${s.cutsPerBono} cortes por ${s.bonoPrice} €. Ahora te quedan ${cl.remaining + s.cutsPerBono}. Míralo aquí:\n${personalLink(cl.token)}`;
+const bonoMsg = (cl, s) => `Bono cargado 🎟️ Tienes ${cl.remaining + s.cutsPerBono} cortes por delante. A lucir cabeza. Míralo aquí:\n${personalLink(cl.token)}`;
 
 async function adminCall(action, body) {
   try {
