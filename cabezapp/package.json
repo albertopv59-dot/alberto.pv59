@@ -1,0 +1,14 @@
+{
+  "name": "cabezapp",
+  "version": "1.0.0",
+  "description": "CabezApp: citas, bonos y reseñas de la barbería de Cabezas",
+  "scripts": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@netlify/blobs": "^10.7.13"
+  },
+  "private": true,
+  "type": "module"
+}

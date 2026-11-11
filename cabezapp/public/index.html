@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CabezApp</title>
+<meta name="description" content="La barbería de Cabezas. Pide cita, mira tu bono y deja tu reseña.">
+<meta name="theme-color" content="#0B0E17">
+<meta property="og:title" content="CabezApp · La barbería de Cabezas">
+<meta property="og:description" content="Pide cita, mira cuántos cortes te quedan del bono y deja tu reseña.">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="pole" aria-hidden="true"></div>
+  <div class="wrap bar-top">
+    <a class="logo" href="/" id="logo">Cabez<b>App</b></a>
+    <span class="tag" id="roleTag"></span>
+  </div>
+</header>
+<main class="wrap" id="app"><p class="loading">Cargando…</p></main>
+<div class="toast" id="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>
