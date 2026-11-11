@@ -4,27 +4,44 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>CabezApp</title>
-<meta name="description" content="La barbería de Cabezas. Pide cita, mira tu bono y deja tu reseña.">
+<meta name="description" content="Pilla tu corte con Cabezas. Degradados de calle, bono de 5 cortes por 25 €.">
 <meta name="theme-color" content="#0B0E17">
-<meta property="og:title" content="CabezApp · La barbería de Cabezas">
-<meta property="og:description" content="Pide cita, mira cuántos cortes te quedan del bono y deja tu reseña.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="CabezApp">
+<meta property="og:title" content="CabezApp · Pilla tu corte con Cabezas">
+<meta property="og:description" content="Pide corte para esta semana, mira tu bono y deja tu reseña.">
+<meta property="og:image" content="https://cabezapp.netlify.app/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
-<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CabezApp">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script>
+  // The installed app opens the page it was installed from (zona personal, admin o inicio)
+  (function () {
+    var p = location.pathname, start = /^\/c\/[A-Za-z0-9_-]{6,40}$/.test(p) || p === "/admin" ? p : "/";
+    document.write('<link rel="manifest" href="/api/manifest?start=' + encodeURIComponent(start) + '">');
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/styles.css?v=2">
 </head>
 <body>
 <header class="top">
   <div class="pole" aria-hidden="true"></div>
   <div class="wrap bar-top">
-    <a class="logo" href="/" id="logo">Cabez<b>App</b></a>
+    <a class="brand" href="/" id="logo"><img src="/logo.svg" alt="" width="40" height="40"><span class="logo">Cabez<b>App</b></span></a>
     <span class="tag" id="roleTag"></span>
   </div>
 </header>
 <main class="wrap" id="app"><p class="loading">Cargando…</p></main>
 <div class="toast" id="toast" hidden></div>
-<script src="/app.js"></script>
+<script src="/app.js?v=2"></script>
 </body>
 </html>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="CabezApp">
+  <defs>
+    <pattern id="pole" width="24" height="24" patternUnits="userSpaceOnUse" patternTransform="rotate(40)">
+      <rect width="24" height="24" fill="#FFFFFF"/>
+      <rect width="6" height="24" fill="#FF3B4E"/>
+      <rect x="12" width="6" height="24" fill="#5B86FF"/>
+    </pattern>
+  </defs>
+  <g transform="rotate(-22 100 104)" stroke="#0B0E17" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+    <circle cx="74" cy="150" r="30" fill="#FFD5DC"/>
+    <circle cx="126" cy="150" r="30" fill="#FFD5DC"/>
+    <path d="M76 151 V60 a24 24 0 0 1 48 0 V151 Z" fill="url(#pole)" stroke="none"/>
+    <path d="M76 70 V60 a24 24 0 0 1 48 0 V70 q-24 14 -48 0 Z" fill="#FFD5DC" stroke="none"/>
+    <path d="M76 150 V60 a24 24 0 0 1 48 0 V150" fill="none"/>
+    <path d="M76 70 q24 14 48 0" fill="none"/>
+    <path d="M100 37 v7" fill="none" stroke-width="5"/>
+  </g>
+  <g fill="#FFC53D">
+    <path d="M160 34 l4 10 10 4 -10 4 -4 10 -4 -10 -10 -4 10 -4z"/>
+    <path d="M34 66 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3z"/>
+  </g>
+</svg>

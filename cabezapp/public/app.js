@@ -1,11 +1,13 @@
 // CabezApp front-end: three screens on one page.
-//   /            -> cualquiera pide cita (nombre + móvil)
-//   /c/<token>   -> zona personal del colega: bono, citas, reseña
+//   /            -> cualquiera pide corte para una semana (nombre + móvil)
+//   /c/<token>   -> zona personal: pide corte, pilla hueco, bono, reseña
 //   /admin       -> panel de Cabezas
 "use strict";
 
 const HOURS = ["1000", "1100", "1200", "1300", "1600", "1700", "1800", "1900", "2000", "2100"];
 const STYLES = ["Degradado", "Lo de siempre", "Rapado", "Solo puntas", "Arreglo de barba", "Sorpréndeme"];
+const PREFS = [["igual", "Me da igual"], ["tardes", "Por la tarde"], ["mananas", "Por la mañana"], ["finde", "Finde"]];
+const prefLabel = (p) => (PREFS.find((x) => x[0] === p) || PREFS[0])[1];
 const LS_TOKEN = "cabezapp-token";
 const LS_ADMIN = "cabezapp-admin";
 
@@ -22,10 +24,14 @@ const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 const fmt = (d, o) => d.toLocaleDateString("es-ES", o);
 const longDay = (s) => cap(fmt(fromYmd(s), { weekday: "long", day: "numeric", month: "long" }));
 const shortDay = (s) => cap(fmt(fromYmd(s), { weekday: "short", day: "numeric", month: "short" }));
+const dayName = (s) => cap(fmt(fromYmd(s), { weekday: "long", day: "numeric" }));
 const today0 = () => { const t = new Date(); t.setHours(0, 0, 0, 0); return t; };
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const isPast = (d, h) => { const x = fromYmd(d); x.setHours(+h.slice(0, 2), +h.slice(2)); return x <= new Date(); };
+const slotTxt = (s) => `${shortDay(s.slice(0, 8))} · ${hm(s.slice(8))}`;
 const firstName = (n) => String(n || "").trim().split(/\s+/)[0] || "";
+const weekRange = (w) => `${fmt(fromYmd(w), { day: "numeric" })}–${fmt(addDays(fromYmd(w), 6), { day: "numeric", month: "short" })}`;
+const weekLabel = (w, weeks) => (w === weeks.current ? "esta semana" : w === weeks.next ? "la semana que viene" : "la semana del " + weekRange(w));
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -59,111 +65,103 @@ async function api(path, { method = "GET", body, admin } = {}) {
   const r = await fetch("/api/" + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let data = {};
   try { data = await r.json(); } catch {}
-  if (!r.ok) { const e = new Error(data.error || "Algo ha fallado. Prueba otra vez."); e.status = r.status; throw e; }
+  if (!r.ok) { const e = new Error(data.error || "Algo ha petado. Prueba otra vez."); e.status = r.status; throw e; }
   return data;
 }
 
-// =====================================================================
-// Booking widget (shared by / and /c/<token>)
-// =====================================================================
-function booking(el, { availability, needContact, onDone }) {
-  const s = { d: null, h: null, style: STYLES[0], note: "", name: "", phone: "", busy: false, error: "" };
-  const days = Object.keys(availability).sort();
+// ---------- installable app ----------
+let deferredPrompt = null;
+const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault(); deferredPrompt = e;
+  document.querySelectorAll("[data-install-btn]").forEach((b) => (b.hidden = false));
+});
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-install-btn]");
+  if (!b || !deferredPrompt) return;
+  deferredPrompt.prompt();
+  const r = await deferredPrompt.userChoice.catch(() => null);
+  if (r && r.outcome === "accepted") { toast("Instalada. Búscala en tu móvil"); b.closest(".install")?.remove(); }
+  deferredPrompt = null;
+});
+function installCard(what) {
+  if (standalone()) return "";
+  const how = isIOS
+    ? "En Safari: botón Compartir y luego «Añadir a pantalla de inicio»."
+    : "Menú del navegador (⋮) y «Instalar app» o «Añadir a pantalla de inicio».";
+  return `<div class="card install"><img src="/icon-192.png" alt=""><div class="grow"><b>Tenla como app</b><p>${esc(what)} ${how}</p></div>
+    ${isIOS ? "" : `<button class="btn primary sm" data-install-btn ${deferredPrompt ? "" : "hidden"}>Instalar</button>`}</div>`;
+}
+if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
 
+// =====================================================================
+// Request form: which week, when, which cut
+// =====================================================================
+function requestForm(el, { needContact, weeks, onDone }) {
+  const s = { week: weeks.current, pref: "igual", style: STYLES[0], note: "", name: "", phone: "", busy: false, error: "" };
+  const ready = () => !needContact || (s.name.trim().length > 1 && s.phone.replace(/\D/g, "").length >= 9);
   function draw() {
-    if (!days.length) {
-      el.innerHTML = `<div class="card"><h3>Ahora mismo no hay huecos</h3><p class="muted" style="margin:0">Cabezas todavía no ha abierto agenda. Vuelve en un rato o escríbele.</p></div>`;
-      return;
-    }
-    const hs = s.d ? availability[s.d] : [];
-    const ready = s.d && s.h && (!needContact || (s.name.trim().length > 1 && s.phone.replace(/\D/g, "").length >= 9));
     el.innerHTML = `
-      <div class="step">
-        <div class="step-t"><i>1</i> Elige día</div>
-        <div class="dpick">${days.map((d) => {
-          const x = fromYmd(d), n = availability[d].length;
-          return `<button class="dbtn${s.d === d ? " on" : ""}" data-d="${d}" aria-pressed="${s.d === d}">
-            <span class="wd">${esc(fmt(x, { weekday: "short" }))}</span><span class="n">${x.getDate()}</span>
-            <span class="c">${n} ${n === 1 ? "hueco" : "huecos"}</span></button>`;
-        }).join("")}</div>
-      </div>
-      <div class="step" ${s.d ? "" : "hidden"}>
-        <div class="step-t"><i>2</i> Elige hora</div>
-        <div class="hours">${hs.map((h) => `<button class="chip${s.h === h ? " on" : ""}" data-h="${h}" aria-pressed="${s.h === h}">${hm(h)}</button>`).join("")}</div>
-      </div>
-      <div class="step" ${s.h ? "" : "hidden"}>
-        <div class="step-t"><i>3</i> ¿Qué te hacemos?</div>
-        <div class="pills">${STYLES.map((x) => `<button class="pill${s.style === x ? " on" : ""}" data-s="${esc(x)}" aria-pressed="${s.style === x}">${esc(x)}</button>`).join("")}</div>
-        <input class="field" id="bk-note" maxlength="200" placeholder="Algo más (opcional): «que no se note el trasquilón de la última vez»" value="${esc(s.note)}">
-      </div>
-      ${needContact ? `<div class="step" ${s.h ? "" : "hidden"}>
-        <div class="step-t"><i>4</i> ¿Quién eres?</div>
+      <div class="step"><div class="step-t"><i>1</i> ¿Qué semana?</div>
+        <div class="weekpick">${[["current", "Esta semana"], ["next", "La que viene"]].map(([k, l]) => `
+          <button class="wbtn${s.week === weeks[k] ? " on" : ""}" data-week="${weeks[k]}" aria-pressed="${s.week === weeks[k]}"><b>${l}</b><span>${esc(weekRange(weeks[k]))}</span></button>`).join("")}
+        </div></div>
+      <div class="step"><div class="step-t"><i>2</i> ¿Cuándo te pilla mejor?</div>
+        <div class="pills">${PREFS.map(([k, l]) => `<button class="pill${s.pref === k ? " on" : ""}" data-pref="${k}" aria-pressed="${s.pref === k}">${l}</button>`).join("")}</div></div>
+      <div class="step"><div class="step-t"><i>3</i> ¿Qué te hacemos?</div>
+        <div class="pills">${STYLES.map((x) => `<button class="pill${s.style === x ? " on" : ""}" data-style="${esc(x)}" aria-pressed="${s.style === x}">${esc(x)}</button>`).join("")}</div>
+        <input class="field" id="rq-note" maxlength="200" placeholder="Algo más (opcional): «que no se note el trasquilón de la última vez»" value="${esc(s.note)}"></div>
+      ${needContact ? `<div class="step"><div class="step-t"><i>4</i> ¿Quién eres?</div>
         <div class="grid2">
-          <div><label class="fl" for="bk-name">Nombre</label><input class="field" id="bk-name" autocomplete="given-name" maxlength="40" value="${esc(s.name)}" placeholder="Tu nombre o mote"></div>
-          <div><label class="fl" for="bk-phone">Móvil (WhatsApp)</label><input class="field" id="bk-phone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(s.phone)}" placeholder="600 123 456"></div>
-        </div>
-        <p class="muted small" style="margin:0">Te escribimos aquí para confirmarte la cita.</p>
-      </div>` : ""}
+          <div><label class="fl" for="rq-name">Nombre</label><input class="field" id="rq-name" autocomplete="given-name" maxlength="40" value="${esc(s.name)}" placeholder="Tu nombre o mote"></div>
+          <div><label class="fl" for="rq-phone">Móvil (WhatsApp)</label><input class="field" id="rq-phone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(s.phone)}" placeholder="600 123 456"></div>
+        </div><p class="muted small" style="margin:0">Cabezas te manda aquí los huecos.</p></div>` : ""}
       ${s.error ? `<p class="err">${esc(s.error)}</p>` : ""}
-      <button class="btn primary" id="bk-send" ${ready && !s.busy ? "" : "disabled"}>
-        ${s.busy ? "Enviando…" : s.d && s.h ? `Pedir cita · ${esc(cap(fmt(fromYmd(s.d), { weekday: "long" })))} ${hm(s.h)}` : "Elige día y hora"}
-      </button>`;
+      <button class="btn primary" id="rq-send" ${ready() && !s.busy ? "" : "disabled"}>${s.busy ? "Enviando…" : `Pedir corte para ${esc(weekLabel(s.week, weeks))}`}</button>`;
   }
-
   el.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
     if (!b || !el.contains(b)) return;
-    if (b.dataset.d) { s.d = b.dataset.d; s.h = null; }
-    else if (b.dataset.h) s.h = b.dataset.h;
-    else if (b.dataset.s) s.style = b.dataset.s;
-    else if (b.id === "bk-send") {
+    if (b.dataset.week) s.week = b.dataset.week;
+    else if (b.dataset.pref) s.pref = b.dataset.pref;
+    else if (b.dataset.style) s.style = b.dataset.style;
+    else if (b.id === "rq-send") {
       s.busy = true; s.error = ""; draw();
-      try {
-        await onDone({ d: s.d, h: s.h, style: s.style, note: s.note, name: s.name, phone: s.phone });
-        return;
-      } catch (err) { s.error = err.message; s.busy = false; }
+      try { await onDone({ week: s.week, pref: s.pref, style: s.style, note: s.note, name: s.name, phone: s.phone }); return; }
+      catch (err) { s.error = err.message; s.busy = false; }
     } else return;
     draw();
   });
   el.addEventListener("input", (e) => {
     const t = e.target;
-    if (t.id === "bk-note") s.note = t.value;
-    if (t.id === "bk-name") s.name = t.value;
-    if (t.id === "bk-phone") s.phone = t.value;
-    if (t.id === "bk-name" || t.id === "bk-phone") {
-      const btn = $("#bk-send", el);
-      const ok = s.d && s.h && s.name.trim().length > 1 && s.phone.replace(/\D/g, "").length >= 9;
-      btn.disabled = !ok;
-    }
+    if (t.id === "rq-note") s.note = t.value;
+    if (t.id === "rq-name") s.name = t.value;
+    if (t.id === "rq-phone") s.phone = t.value;
+    if (t.id === "rq-name" || t.id === "rq-phone") $("#rq-send", el).disabled = !ready();
   });
   draw();
 }
 
-function ticket(d, h, style, who) {
-  return `<div class="ticket">
-    <div class="t1"><span class="eyebrow">Solicitud enviada · pendiente de validar</span>
-      <div class="bigt">${hm(h)}</div><div class="when">${esc(longDay(d))}</div></div>
-    <div class="perf"></div>
-    <div class="t2"><div><span>Cliente</span><b>${esc(who)}</b></div><div><span>Corte</span><b>${esc(style)}</b></div></div>
-  </div>`;
-}
+const requestMsg = (b, who, weeks) =>
+  `Ey Cabezas 💈 Quiero cortarme ${weekLabel(b.week, weeks)} (${prefLabel(b.pref).toLowerCase()}).\n✂️ ${b.style}` + (b.note ? `\n📝 ${b.note}` : "") + `\nSoy ${who}. Pásame huecos 🙏`;
 
-function requestSent(el, { d, h, style, note, who, settings, link }) {
-  const msg = `Ey Cabezas 💈 Te he pedido cita en CabezApp:\n📅 ${longDay(d)} a las ${hm(h)}\n✂️ ${style}` + (note ? `\n📝 ${note}` : "") + `\nSoy ${who}. ¡Valídamela!` + (link ? `\n${link}` : "");
+function requestSent(el, { b, who, settings, weeks, back }) {
   el.innerHTML = `
-    <div><h1>¡Pedida! Ahora <em>avisa</em> a Cabezas.</h1>
-    <p class="lead">Tu cita está pendiente hasta que él la valide. Mándale un WhatsApp para que la vea antes.</p></div>
-    ${ticket(d, h, style, who)}
-    ${settings.adminPhone
-      ? `<a class="btn wa" href="${wa(settings.adminPhone, msg)}" target="_blank" rel="noopener">${ICON.wa} Avisar a Cabezas por WhatsApp</a>`
-      : `<p class="muted">Cabezas verá tu solicitud en su panel.</p>`}
-    <p class="muted small" style="margin:0">Cuando la valide te llegará un WhatsApp de confirmación.</p>`;
+    <div class="state hot">
+      <span class="eyebrow">Pedido para ${esc(weekLabel(b.week, weeks))}</span>
+      <h2>¡Hecho! Ahora dale un toque a Cabezas.</h2>
+      <p>Te pasará sus huecos libres por WhatsApp y tú pillas el que te venga.</p>
+      ${settings.adminPhone ? `<a class="btn wa" href="${wa(settings.adminPhone, requestMsg(b, who, weeks))}" target="_blank" rel="noopener">${ICON.wa} Avisar a Cabezas</a>` : ""}
+    </div>
+    ${back ? `<a class="btn ghost" href="${back}">Volver a mi zona</a>` : ""}`;
+  window.scrollTo(0, 0);
 }
 
 function reviewsBlock(reviews) {
-  if (!reviews.count) return `<div class="section"><h2>Reseñas</h2><p class="empty">Todavía no hay reseñas. Sé el primero cuando te corte.</p></div>`;
+  if (!reviews.count) return `<div class="section"><h2>Reseñas</h2><p class="empty">Todavía nadie ha opinado. Estrénalas tú después de tu corte.</p></div>`;
   return `<div class="section">
-    <div class="section-head"><h2>Lo que dicen los colegas</h2></div>
+    <h2>Lo que dicen los colegas</h2>
     <div class="score"><b>${reviews.avg.toFixed(1).replace(".", ",")}</b><div>${stars(Math.round(reviews.avg))}<div class="muted small">${reviews.count} ${reviews.count === 1 ? "reseña" : "reseñas"}</div></div></div>
     <div class="list">${reviews.list.map((r) => `<div class="review">
       <div class="item-row"><b class="grow">${esc(r.name)}</b>${stars(r.stars)}</div>
@@ -171,7 +169,7 @@ function reviewsBlock(reviews) {
 }
 
 // =====================================================================
-// /  — anyone can ask for an appointment
+// /  — anyone asks for a cut
 // =====================================================================
 async function landing() {
   $("#roleTag").textContent = "";
@@ -180,26 +178,25 @@ async function landing() {
   const s = data.settings;
   app.innerHTML = `
     ${saved ? `<a class="btn ghost" href="/c/${esc(saved)}">Ir a mi zona (bono y citas)</a>` : ""}
-    <div>
-      <h1>La barbería de <em>Cabezas</em>.</h1>
-      <p class="lead">Pide hora, elige el corte y listo. Si tienes bono, tu zona te dice cuántos cortes te quedan.</p>
-    </div>
+    <div class="hero"><div class="grow">
+      <h1>Pilla tu <em>corte</em>.</h1>
+      <p class="lead">Dile a Cabezas qué semana te viene bien y te pasa sus huecos por WhatsApp.</p></div>
+      <div class="hero-logo" aria-hidden="true"><img src="/logo.svg" alt=""></div></div>
     <div class="bono">
       <div class="top"><div><div class="eyebrow" style="color:#C9D2EA">Bono</div>
         <div class="big">${s.cutsPerBono}<small>cortes</small></div>
-        <div class="sub">${s.bonoPrice} € · sale a ${(s.bonoPrice / s.cutsPerBono).toFixed(0)} € el corte</div></div>
+        <div class="sub">${s.bonoPrice} € · sale a ${(s.bonoPrice / s.cutsPerBono).toFixed(0)} € el corte. Suelto: ${s.loosePrice} €</div></div>
         <span class="sticker">Pídeselo a Cabezas</span></div>
     </div>
-    <div class="section"><h2>Pide cita</h2><div id="bk"></div></div>
+    <div class="section"><h2>Pide tu corte</h2><div id="rq"></div></div>
+    ${installCard("Así pides corte en dos toques.")}
     ${reviewsBlock(data.reviews)}
-    <footer class="foot">CabezApp · degradados con cariño desde el salón de casa</footer>`;
-  booking($("#bk"), {
-    availability: data.availability,
-    needContact: true,
+    <footer class="foot">CabezApp · degradados de calle desde el salón de casa.<br>No nos hacemos responsables de dibujos en la nuca.</footer>`;
+  requestForm($("#rq"), {
+    needContact: true, weeks: data.weeks,
     onDone: async (b) => {
       await api("request", { method: "POST", body: b });
-      requestSent(app, { ...b, who: b.name.trim(), settings: s });
-      window.scrollTo(0, 0);
+      requestSent(app, { b, who: b.name.trim(), settings: s, weeks: data.weeks });
     },
   });
 }
@@ -207,17 +204,16 @@ async function landing() {
 // =====================================================================
 // /c/<token> — personal zone
 // =====================================================================
-const STATUS_TXT = { pendiente: "Por validar", confirmada: "Confirmada", hecha: "Hecha", rechazada: "No pudo ser", cancelada: "Cancelada" };
+const STATUS_TXT = { pedida: "Pedido", huecos: "Elige hueco", confirmada: "Confirmada", hecha: "Hecho", rechazada: "No pudo ser", cancelada: "Cancelada" };
 
 function punchCard(me, settings) {
   if (!me.total) {
     return `<div class="bono empty"><div class="top"><div>
       <div class="eyebrow">Tu bono</div><div class="big">0<small>cortes</small></div>
-      <div class="sub muted">No tienes bono. Corte suelto: ${settings.loosePrice} €. Bono de ${settings.cutsPerBono} cortes: ${settings.bonoPrice} €.</div></div>
+      <div class="sub muted">Sin bono. Corte suelto: ${settings.loosePrice} €. Bono de ${settings.cutsPerBono} cortes: ${settings.bonoPrice} €.</div></div>
       <span class="sticker">Pídele uno</span></div></div>`;
   }
   const per = settings.cutsPerBono;
-  // Holes of the bono in use: the one that still has cuts left (or the last one if all are spent)
   const usedInCurrent = me.remaining === 0 ? per : me.used % per;
   const extra = Math.max(0, me.remaining - (per - usedInCurrent));
   const holes = Array.from({ length: per }, (_, i) => i < usedInCurrent
@@ -234,34 +230,69 @@ function punchCard(me, settings) {
   </div>`;
 }
 
+let personalWired = false, myStars = 0, pickSel = null, currentToken = null;
+
+function openBlock(c, me, settings, weeks) {
+  const wl = weekLabel(c.week, weeks);
+  if (c.status === "pedida") {
+    return `<div class="state"><span class="eyebrow">Pedido · ${esc(wl)}</span>
+      <h2>Esperando huecos de Cabezas</h2>
+      <p class="muted">Te los pasa por WhatsApp. ${esc(prefLabel(c.pref))} · ${esc(c.style)}.</p>
+      <div class="row"><button class="btn ghost sm" data-cancel="${c.id}">Cancelar pedido</button></div></div>`;
+  }
+  if (c.status === "huecos") {
+    if (!c.offer.length) {
+      return `<div class="state"><span class="eyebrow">${esc(wl)}</span><h2>Se han pillado todos los huecos</h2>
+        <p class="muted">Pídele a Cabezas que te pase más.</p>
+        ${settings.adminPhone ? `<a class="btn wa" href="${wa(settings.adminPhone, `Ey Cabezas, se han pillado todos los huecos que me pasaste 😅 ¿Me pasas más para ${wl}?`)}" target="_blank" rel="noopener">${ICON.wa} Pedir más huecos</a>` : ""}</div>`;
+    }
+    const byDay = {};
+    c.offer.forEach((s) => (byDay[s.slice(0, 8)] = byDay[s.slice(0, 8)] || []).push(s));
+    return `<div class="state hot"><span class="eyebrow">Huecos para ${esc(wl)}</span>
+      <h2>Cabezas te ha pasado huecos. Pilla uno.</h2>
+      ${Object.keys(byDay).sort().map((d) => `<div class="slotday"><h3>${esc(dayName(d))}</h3>
+        <div class="hours">${byDay[d].map((s) => `<button class="chip${pickSel === s ? " on" : ""}" data-pick="${s}" aria-pressed="${pickSel === s}">${hm(s.slice(8))}</button>`).join("")}</div></div>`).join("")}
+      <button class="btn primary" id="pick-go" data-id="${c.id}" ${pickSel ? "" : "disabled"}>${pickSel ? `Pillar ${esc(dayName(pickSel.slice(0, 8)).toLowerCase())} a las ${hm(pickSel.slice(8))}` : "Elige un hueco"}</button>
+      <p class="muted small">El primero que lo pilla se lo queda.</p></div>`;
+  }
+  // confirmada
+  return `<div class="ticket">
+    <div class="t1"><span class="eyebrow">Corte confirmado</span>
+      <div class="bigt">${hm(c.h)}</div><div class="when">${esc(longDay(c.d))}</div></div>
+    <div class="perf"></div>
+    <div class="t2"><div><span>Cliente</span><b>${esc(me.name)}</b></div><div><span>Corte</span><b>${esc(c.style)}</b></div>
+      <div style="grid-column:1/-1"><span>Bono</span><b>${me.remaining > 0 ? `Gastas 1 de los ${me.remaining} que te quedan` : `Sin bono: ${settings.loosePrice} €`}</b></div></div>
+  </div>
+  ${settings.confirmText ? `<p class="disclaimer">${esc(settings.confirmText)}</p>` : ""}
+  <div class="row">
+    ${settings.adminPhone ? `<a class="btn wa" href="${wa(settings.adminPhone, `Pillado ✂️ ${longDay(c.d)} a las ${hm(c.h)}. Nos vemos, crack.`)}" target="_blank" rel="noopener">${ICON.wa} Avisar a Cabezas</a>` : ""}
+    <button class="btn ghost" data-cancel="${c.id}">Cancelar</button></div>`;
+}
+
 async function personal(token) {
   $("#roleTag").textContent = "Tu zona";
+  currentToken = token;
   let data;
   try { data = await api("me?t=" + encodeURIComponent(token)); }
   catch (e) {
-    store.del(LS_TOKEN);
-    app.innerHTML = `<div><h1>Enlace <em>roto</em>.</h1><p class="lead">${esc(e.message)}</p></div><a class="btn primary" href="/">Pedir cita igualmente</a>`;
+    if (e.status === 404) store.del(LS_TOKEN);
+    app.innerHTML = `<div><h1>Enlace <em>roto</em>.</h1><p class="lead">${esc(e.message)}</p></div><a class="btn primary" href="/">Pedir corte igualmente</a>`;
     return;
   }
   store.set(LS_TOKEN, token);
-  const { me, settings, availability, reviews } = data;
-  const upcoming = me.citas.filter((c) => ["pendiente", "confirmada"].includes(c.status) && !isPast(c.d, c.h)).reverse();
+  const { me, settings, reviews, weeks } = data;
+  const open = me.citas.find((c) => c.open);
   const history = me.citas.filter((c) => c.status === "hecha");
   const r = me.myReview;
   myStars = r ? r.stars : 0;
+  if (open && open.status === "huecos" && pickSel && !open.offer.includes(pickSel)) pickSel = null;
 
   app.innerHTML = `
-    <div><h1>¿Qué pasa, <em>${esc(firstName(me.name))}</em>?</h1>
-    <p class="lead">Aquí pides cita, ves tu bono y le pones nota a Cabezas.</p></div>
+    <div class="hero"><div class="grow"><h1>¿Qué pasa, <em>${esc(firstName(me.name))}</em>?</h1>
+    <p class="lead">${open ? "Tienes un corte en marcha." : "¿Toca corte? Pídelo aquí."}</p></div></div>
+    ${open ? openBlock(open, me, settings, weeks) : `<div class="section"><h2>Pide tu corte</h2><div id="rq"></div></div>`}
     ${punchCard(me, settings)}
-    ${upcoming.length ? `<div class="section"><h2>Tus citas</h2><div class="list">${upcoming.map((c) => `
-      <div class="item"><div class="item-row">
-        <div class="time">${hm(c.h)}</div>
-        <div class="grow"><div class="name">${esc(longDay(c.d))}</div><div class="muted small">${esc(c.style)}</div></div>
-        <span class="status st-${c.status}">${STATUS_TXT[c.status]}</span></div>
-        <div class="row"><button class="btn ghost sm" data-cancel="${c.id}">Cancelar cita</button></div>
-      </div>`).join("")}</div></div>` : ""}
-    <div class="section"><h2>Pide cita</h2><div id="bk"></div></div>
+    ${installCard("Tu bono y tus cortes, siempre a mano.")}
     <div class="section">
       <h2>${r ? "Tu reseña" : "Ponle nota a Cabezas"}</h2>
       <div class="card">
@@ -271,60 +302,67 @@ async function personal(token) {
       </div>
     </div>
     ${reviewsBlock(reviews)}
-    ${history.length ? `<div class="section"><h2>Historial</h2><div class="list">${history.map((c) => `
+    ${history.length ? `<div class="section"><h2>Tus cortes</h2><div class="list">${history.map((c) => `
       <div class="item"><div class="item-row"><div class="grow"><b>${esc(shortDay(c.d))}</b> · ${esc(c.style)}</div>
       <span class="muted small">${c.loose ? "Suelto" : "Del bono"}</span></div></div>`).join("")}</div></div>` : ""}
-    <footer class="foot">Guarda este enlace: es solo tuyo.</footer>`;
+    <footer class="foot">Este enlace es solo tuyo. No se lo pases a nadie (o te gastan el bono).</footer>`;
 
-  booking($("#bk"), {
-    availability,
-    needContact: false,
-    onDone: async (b) => {
-      await api("request", { method: "POST", body: { ...b, t: token } });
-      requestSent(app, { ...b, who: me.name, settings, link: null });
-      app.insertAdjacentHTML("beforeend", `<a class="btn ghost" href="/c/${esc(token)}">Volver a mi zona</a>`);
-      window.scrollTo(0, 0);
-    },
-  });
+  if (!open) {
+    requestForm($("#rq"), {
+      needContact: false, weeks,
+      onDone: async (b) => {
+        await api("request", { method: "POST", body: { ...b, t: token } });
+        requestSent(app, { b, who: me.name, settings, weeks, back: "/c/" + encodeURIComponent(token) });
+      },
+    });
+  }
 
   if (personalWired) return;
   personalWired = true;
   app.addEventListener("click", async (e) => {
     const b = e.target.closest("button");
     if (!b || route() !== "client") return;
+    const t = currentToken;
     if (b.dataset.star) {
       myStars = +b.dataset.star;
       $("#starpick").querySelectorAll("button").forEach((x) => x.classList.toggle("on", +x.dataset.star <= myStars));
+    } else if (b.dataset.pick) {
+      pickSel = b.dataset.pick; personal(t);
+    } else if (b.id === "pick-go") {
+      b.disabled = true; b.textContent = "Pillando…";
+      try { await api("pick", { method: "POST", body: { t, id: b.dataset.id, slot: pickSel } }); pickSel = null; toast("¡Pillado! Corte confirmado"); }
+      catch (err) { toast(err.message, true); pickSel = null; }
+      personal(t); window.scrollTo(0, 0);
     } else if (b.id === "rv-send") {
       if (!myStars) return toast("Elige las estrellas", true);
       b.disabled = true;
-      try { await api("review", { method: "POST", body: { t: token, stars: myStars, text: $("#rv-text").value } }); toast("Reseña publicada"); personal(token); }
+      try { await api("review", { method: "POST", body: { t, stars: myStars, text: $("#rv-text").value } }); toast("Reseña publicada"); personal(t); }
       catch (err) { toast(err.message, true); b.disabled = false; }
     } else if (b.dataset.cancel) {
       if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Toca otra vez para cancelar"; b.classList.add("danger"); return; }
-      try { await api("cancel", { method: "POST", body: { t: token, id: b.dataset.cancel } }); toast("Cita cancelada"); personal(token); }
+      try { await api("cancel", { method: "POST", body: { t, id: b.dataset.cancel } }); toast("Cancelado"); personal(t); }
       catch (err) { toast(err.message, true); }
     }
   });
 }
-let personalWired = false;
-let myStars = 0;
 
 // =====================================================================
 // /admin — Cabezas' panel
 // =====================================================================
-const A = { db: null, tab: "citas", week: 0, openClient: null };
+const A = { db: null, tab: "peticiones", week: 0, openClient: null, sel: {} };
 
+const offerMsg = (c, cl, slots) =>
+  `Ey ${firstName(cl.name)} 💈 Huecos para cortarte ${weekLabel(c.week, A.db.weeks)}:\n${slots.map((s) => "• " + slotTxt(s)).join("\n")}\n\nPilla el tuyo aquí antes de que vuele 👇\n${personalLink(cl.token)}`;
+const rejectMsg = (c, cl) => `Ey ${firstName(cl.name)}, ${weekLabel(c.week, A.db.weeks)} imposible 😩 Pídemelo para otra semana aquí:\n${personalLink(cl.token)}`;
 function confirmMsg(c, cl, s) {
   const left = cl.remaining;
   const bono = left > 0
     ? `🎟️ Bono: te quedan ${left} ${left === 1 ? "corte" : "cortes"} (contando este)`
-    : `🎟️ No te queda bono: este corte son ${s.loosePrice} €. Bono de ${s.cutsPerBono} cortes por ${s.bonoPrice} €, tú verás.`;
-  return `✅ Cita CONFIRMADA en CabezApp 💈\n📅 ${longDay(c.d)} a las ${hm(c.h)}\n✂️ ${c.style}\n${bono}\n\n⚠️ ${s.confirmText}\n\nTu zona (citas, bono y reseñas):\n${personalLink(cl.token)}`;
+    : `🎟️ Sin bono: este corte son ${s.loosePrice} €. Bono de ${s.cutsPerBono} por ${s.bonoPrice} €, tú verás.`;
+  return `✅ Corte CONFIRMADO en CabezApp 💈\n📅 ${longDay(c.d)} a las ${hm(c.h)}\n✂️ ${c.style}\n${bono}\n\n⚠️ ${s.confirmText}\n\nTu zona:\n${personalLink(cl.token)}`;
 }
-const rejectMsg = (c, cl) => `Ey ${firstName(cl.name)}, el ${longDay(c.d).toLowerCase()} a las ${hm(c.h)} al final no puedo 😅 Pilla otra hora aquí:\n${personalLink(cl.token)}`;
-const linkMsg = (cl) => `Ey ${firstName(cl.name)}! 💈 Esta es tu zona de CabezApp: pides cita, ves cuántos cortes te quedan del bono y me dejas reseña. Es solo tuya, guárdala:\n${personalLink(cl.token)}`;
-const doneMsg = (cl, left) => `Corte hecho ✂️ ${left > 0 ? `Te ${left === 1 ? "queda" : "quedan"} ${left} ${left === 1 ? "corte" : "cortes"} del bono.` : "Bono agotado, toca renovar 🫡"}\nSi te ha gustado (o no), déjame una reseña:\n${personalLink(cl.token)}`;
+const linkMsg = (cl) => `Ey ${firstName(cl.name)}! 💈 Esta es tu zona de CabezApp: pides corte, ves cuántos te quedan del bono y me dejas reseña. Es solo tuya, guárdala o instálala como app:\n${personalLink(cl.token)}`;
+const doneMsg = (cl, left) => `Corte hecho ✂️ ${left > 0 ? `Te ${left === 1 ? "queda" : "quedan"} ${left} ${left === 1 ? "corte" : "cortes"} del bono.` : "Bono fundido, toca renovar 🫡"}\nSi te ha gustado (o no), déjame reseña:\n${personalLink(cl.token)}`;
 const bonoMsg = (cl, s) => `Bono cargado 🎟️ ${s.cutsPerBono} cortes por ${s.bonoPrice} €. Ahora te quedan ${cl.remaining + s.cutsPerBono}. Míralo aquí:\n${personalLink(cl.token)}`;
 
 async function adminCall(action, body) {
@@ -346,7 +384,8 @@ async function admin() {
 }
 
 function adminLogin(err) {
-  app.innerHTML = `<div><h1>Panel de <em>Cabezas</em></h1><p class="lead">Mete tu clave de admin. Solo hace falta una vez en este móvil.</p></div>
+  app.innerHTML = `<div class="hero"><div class="grow"><h1>Panel de <em>Cabezas</em></h1><p class="lead">Mete tu clave. Solo una vez en este móvil.</p></div>
+    <div class="hero-logo" aria-hidden="true"><img src="/logo.svg" alt=""></div></div>
     <form class="card" id="login"><label class="fl" for="ak">Clave</label>
     <input class="field" id="ak" type="password" autocomplete="current-password" required>
     ${err ? `<p class="err">${esc(err)}</p>` : ""}<button class="btn primary">Entrar</button></form>`;
@@ -354,32 +393,74 @@ function adminLogin(err) {
 }
 
 const clientById = (id) => A.db.clients.find((c) => c.id === id) || { name: "Borrado", remaining: 0, token: "", phone: "" };
+const takenSet = () => new Set(A.db.citas.filter((c) => (c.status === "confirmada" || c.status === "hecha") && c.d).map((c) => c.d + c.h));
+function freeSlots(week) {
+  const taken = takenSet(), out = [];
+  for (let i = 0; i < 7; i++) {
+    const d = ymd(addDays(fromYmd(week), i));
+    (A.db.availability[d] || []).forEach((h) => { if (!isPast(d, h) && !taken.has(d + h)) out.push(d + h); });
+  }
+  return out.sort();
+}
+function prefMatch(slot, pref) {
+  const h = +slot.slice(8, 10), dow = fromYmd(slot.slice(0, 8)).getDay();
+  if (pref === "tardes") return h >= 15;
+  if (pref === "mananas") return h < 15;
+  if (pref === "finde") return dow === 0 || dow === 6;
+  return true;
+}
 
 function drawAdmin() {
   const db = A.db;
-  const pending = db.citas.filter((c) => c.status === "pendiente" && !isPast(c.d, c.h));
-  const tabs = [["citas", "Citas", pending.length], ["horario", "Horario"], ["clientes", "Clientes"], ["resenas", "Reseñas"], ["ajustes", "Ajustes"]];
+  const asks = db.citas.filter((c) => c.status === "pedida").length;
+  const tabs = [["peticiones", "Peticiones", asks], ["horario", "Huecos"], ["clientes", "Clientes"], ["resenas", "Reseñas"], ["ajustes", "Ajustes"]];
   app.innerHTML = `
     <nav class="tabs" aria-label="Secciones">${tabs.map(([k, l, n]) => `<button class="tab${A.tab === k ? " on" : ""}" data-tab="${k}">${l}${n ? `<span class="badge">${n}</span>` : ""}</button>`).join("")}</nav>
-    <div id="pane"></div>`;
-  ({ citas: paneCitas, horario: paneHorario, clientes: paneClientes, resenas: paneResenas, ajustes: paneAjustes })[A.tab]($("#pane"));
+    <div id="pane" class="section"></div>`;
+  ({ peticiones: panePeticiones, horario: paneHorario, clientes: paneClientes, resenas: paneResenas, ajustes: paneAjustes })[A.tab]($("#pane"));
 }
 
-function citaCard(c, actions) {
+function head(c) {
   const cl = clientById(c.clientId);
-  return `<div class="item">
-    <div class="item-row"><div class="time">${hm(c.h)}</div>
-      <div class="grow"><div class="name">${esc(cl.name)}</div><div class="muted small">${esc(shortDay(c.d))} · ${esc(c.style)} · ${cl.remaining > 0 ? `bono: ${cl.remaining}` : "sin bono"}</div></div>
-      <span class="status st-${c.status}">${STATUS_TXT[c.status]}</span></div>
-    ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}
-    ${actions ? `<div class="row">${actions}</div>` : ""}
+  const when = c.d ? `<div class="time">${hm(c.h)}</div>` : "";
+  const sub = c.d ? `${esc(shortDay(c.d))} · ${esc(c.style)}` : `${esc(cap(weekLabel(c.week, A.db.weeks)))} · ${esc(prefLabel(c.pref).toLowerCase())} · ${esc(c.style)}`;
+  return `<div class="item-row">${when}
+    <div class="grow"><div class="name">${esc(cl.name)}</div><div class="muted small">${sub} · ${cl.remaining > 0 ? `bono: ${cl.remaining}` : "sin bono"}</div></div>
+    <span class="status st-${c.status}">${STATUS_TXT[c.status]}</span></div>
+    ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}`;
+}
+
+function offerCard(c) {
+  const cl = clientById(c.clientId);
+  const free = freeSlots(c.week);
+  if (!A.sel[c.id]) {
+    const base = c.status === "huecos" ? (c.offer || []).filter((s) => free.includes(s)) : free.filter((s) => prefMatch(s, c.pref));
+    A.sel[c.id] = new Set(base.length ? base : free);
+  }
+  const sel = [...A.sel[c.id]].filter((s) => free.includes(s)).sort();
+  const byDay = {};
+  free.forEach((s) => (byDay[s.slice(0, 8)] = byDay[s.slice(0, 8)] || []).push(s));
+  const offerBtn = sel.length
+    ? (cl.phone
+      ? `<a class="btn wa sm" href="${wa(cl.phone, offerMsg(c, cl, sel))}" target="_blank" rel="noopener" data-act="offer" data-id="${c.id}">${ICON.wa} ${c.status === "huecos" ? "Reenviar" : "Mandar"} ${sel.length} ${sel.length === 1 ? "hueco" : "huecos"}</a>`
+      : `<button class="btn wa sm" data-act="offer" data-id="${c.id}">Guardar ${sel.length} huecos (no tiene móvil)</button>`)
+    : `<button class="btn wa sm" disabled>Elige huecos</button>`;
+  return `<div class="item">${head(c)}
+    ${free.length ? `<div class="offerbox"><span class="eyebrow">Tus huecos libres esa semana · toca para quitar o poner</span>
+      ${Object.keys(byDay).sort().map((d) => `<div class="slotday"><h3>${esc(dayName(d))}</h3><div class="hours wide">${byDay[d].map((s) => `<button class="chip${sel.includes(s) ? " sel" : ""}" data-slot="${s}" data-cid="${c.id}" aria-pressed="${sel.includes(s)}">${hm(s.slice(8))}</button>`).join("")}</div></div>`).join("")}</div>`
+      : `<p class="muted small" style="margin:0">No tienes huecos libres ${esc(weekLabel(c.week, A.db.weeks))}. Ábrelos en Huecos.</p><button class="btn ghost sm" data-tab="horario">Abrir huecos</button>`}
+    <div class="row">${offerBtn}
+      ${sel.length === 1 ? `<button class="btn ok sm" data-act="assign" data-id="${c.id}" data-slot="${sel[0]}">Dárselo directo</button>` : ""}
+      ${cl.phone ? `<a class="btn ghost sm" href="${wa(cl.phone, rejectMsg(c, cl))}" target="_blank" rel="noopener" data-act="reject" data-id="${c.id}">Esa semana no</a>`
+        : `<button class="btn ghost sm" data-act="reject" data-id="${c.id}">Esa semana no</button>`}</div>
   </div>`;
 }
 
-function paneCitas(el) {
+function panePeticiones(el) {
   const db = A.db, s = db.settings;
   const sort = (a, b) => (a.d + a.h).localeCompare(b.d + b.h);
-  const pending = db.citas.filter((c) => c.status === "pendiente" && !isPast(c.d, c.h)).sort(sort);
+  const asks = db.citas.filter((c) => c.status === "pedida").sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const waiting = db.citas.filter((c) => c.status === "huecos").sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const confirmed = db.citas.filter((c) => c.status === "confirmada").sort(sort);
   const done = db.citas.filter((c) => c.status === "hecha").sort(sort).reverse().slice(0, 8);
   const lowBono = db.clients.filter((c) => c.total > 0 && c.remaining <= 1);
@@ -387,37 +468,35 @@ function paneCitas(el) {
 
   el.innerHTML = `
     <div class="stats">
-      <div class="stat"><b>${pending.length}</b><span>Por validar</span></div>
-      <div class="stat"><b>${confirmed.length}</b><span>Confirmadas</span></div>
+      <div class="stat"><b>${asks.length}</b><span>Piden corte</span></div>
+      <div class="stat"><b>${confirmed.length}</b><span>Confirmados</span></div>
       <div class="stat"><b>${money}€</b><span>En bonos</span></div>
     </div>
-    ${!s.adminPhone ? `<div class="card"><b>Pon tu WhatsApp en Ajustes</b><span class="muted small">Así los colegas te pueden avisar al pedir cita.</span><button class="btn sm ghost" data-tab="ajustes">Ir a Ajustes</button></div>` : ""}
-    <div class="section"><h2>Por validar</h2><div class="list">${pending.length ? pending.map((c) => {
-      const cl = clientById(c.clientId);
-      return citaCard(c, cl.phone
-        ? `<a class="btn ok sm" href="${wa(cl.phone, confirmMsg(c, cl, s))}" target="_blank" rel="noopener" data-act="confirm" data-id="${c.id}">${ICON.wa} Validar y avisar</a>
-           <a class="btn ghost sm" href="${wa(cl.phone, rejectMsg(c, cl))}" target="_blank" rel="noopener" data-act="reject" data-id="${c.id}">No puedo</a>`
-        : `<button class="btn ok sm" data-act="confirm" data-id="${c.id}">Validar</button><button class="btn ghost sm" data-act="reject" data-id="${c.id}">No puedo</button>`);
-    }).join("") : `<p class="empty">Nada pendiente. Manda tu enlace o abre más huecos en Horario.</p>`}</div></div>
-    <div class="section"><h2>Confirmadas</h2><div class="list">${confirmed.length ? confirmed.map((c) => {
+    ${!s.adminPhone ? `<div class="card"><b>Pon tu WhatsApp en Ajustes</b><span class="muted small">Así los colegas te avisan cuando piden corte.</span><button class="btn sm ghost" data-tab="ajustes">Ir a Ajustes</button></div>` : ""}
+    <div class="section"><h2>Te piden corte</h2><div class="list">${asks.length ? asks.map(offerCard).join("")
+      : `<p class="empty">Nadie pide corte ahora mismo. Pasa el enlace por el grupo (pestaña Huecos).</p>`}</div></div>
+    ${waiting.length ? `<div class="section"><h2>Esperando que pillen hueco</h2><div class="list">${waiting.map(offerCard).join("")}</div></div>` : ""}
+    <div class="section"><h2>Confirmados</h2><div class="list">${confirmed.length ? confirmed.map((c) => {
       const cl = clientById(c.clientId);
       const left = Math.max(0, cl.remaining - 1);
-      return citaCard(c, `
-        ${cl.phone ? `<a class="btn primary sm" href="${wa(cl.phone, doneMsg(cl, left))}" target="_blank" rel="noopener" data-act="done" data-id="${c.id}">Corte hecho ${cl.remaining > 0 ? "(−1 bono)" : "(suelto)"}</a>`
-          : `<button class="btn primary sm" data-act="done" data-id="${c.id}">Corte hecho ${cl.remaining > 0 ? "(−1 bono)" : "(suelto)"}</button>`}
-        <button class="btn ghost sm" data-act="cancel" data-id="${c.id}">Cancelar</button>`);
-    }).join("") : `<p class="empty">No hay citas confirmadas.</p>`}</div></div>
+      const doneLbl = `Corte hecho ${cl.remaining > 0 ? "(−1 bono)" : "(suelto)"}`;
+      return `<div class="item">${head(c)}<div class="row">
+        ${cl.phone ? `<a class="btn ${c.confirmSent ? "ghost" : "ok"} sm" href="${wa(cl.phone, confirmMsg(c, cl, s))}" target="_blank" rel="noopener" data-act="sent" data-id="${c.id}">${ICON.wa} ${c.confirmSent ? "Confirmación enviada" : "Mandar confirmación"}</a>` : ""}
+        ${cl.phone ? `<a class="btn primary sm" href="${wa(cl.phone, doneMsg(cl, left))}" target="_blank" rel="noopener" data-act="done" data-id="${c.id}">${doneLbl}</a>`
+          : `<button class="btn primary sm" data-act="done" data-id="${c.id}">${doneLbl}</button>`}
+        <button class="btn ghost sm" data-act="cancel" data-id="${c.id}">Cancelar</button></div></div>`;
+    }).join("") : `<p class="empty">Ningún corte confirmado.</p>`}</div></div>
     ${lowBono.length ? `<div class="section"><h2>Ofrécele bono</h2><div class="list">${lowBono.map((c) => `
-      <div class="item"><div class="item-row"><div class="grow"><div class="name">${esc(c.name)}</div><div class="muted small">${c.remaining === 0 ? "Bono agotado" : "Le queda 1 corte"}</div></div>
+      <div class="item"><div class="item-row"><div class="grow"><div class="name">${esc(c.name)}</div><div class="muted small">${c.remaining === 0 ? "Bono fundido" : "Le queda 1 corte"}</div></div>
       <button class="btn sm ghost" data-open-client="${c.id}">Ver</button></div></div>`).join("")}</div></div>` : ""}
-    ${done.length ? `<div class="section"><h2>Últimos cortes</h2><div class="list">${done.map((c) => citaCard(c, `<button class="btn ghost sm" data-act="undo-done" data-id="${c.id}">Deshacer</button>`)).join("")}</div></div>` : ""}`;
+    ${done.length ? `<div class="section"><h2>Últimos cortes</h2><div class="list">${done.map((c) => `<div class="item">${head(c)}<div class="row"><button class="btn ghost sm" data-act="undo-done" data-id="${c.id}">Deshacer</button></div></div>`).join("")}</div></div>` : ""}`;
 }
 
 function paneHorario(el) {
   const db = A.db;
-  const t0 = addDays(today0(), A.week * 7), today = ymd(today0());
-  const slotState = {};
-  db.citas.forEach((c) => { if (["pendiente", "confirmada"].includes(c.status)) slotState[c.d + c.h] = c; });
+  const t0 = addDays(fromYmd(db.weeks.current), A.week * 7), today = ymd(today0());
+  const booked = {};
+  db.citas.forEach((c) => { if ((c.status === "confirmada" || c.status === "hecha") && c.d) booked[c.d + c.h] = c; });
   const lbl = A.week === 0 ? "Esta semana" : A.week === 1 ? "La que viene" : `Dentro de ${A.week} semanas`;
   let days = "";
   for (let i = 0; i < 7; i++) {
@@ -427,30 +506,38 @@ function paneHorario(el) {
       <div class="dayhead"><div class="dname">${esc(cap(fmt(fromYmd(d), { weekday: "long", day: "numeric", month: "short" })))}${d === today ? '<span class="today">Hoy</span>' : ""}</div>
       ${allPast ? "" : `<div class="quick"><button data-q="tarde" data-d="${d}">Tarde</button><button data-q="manana" data-d="${d}">Mañana</button><button data-q="nada" data-d="${d}">Nada</button></div>`}</div>
       <div class="hours wide">${HOURS.map((h) => {
-        const c = slotState[d + h], past = isPast(d, h), on = sel.includes(h);
-        if (c) return `<button class="chip ${c.status === "pendiente" ? "pend" : "taken"}" disabled title="${esc(clientById(c.clientId).name)}">${esc(firstName(clientById(c.clientId).name).slice(0, 7))}</button>`;
+        const c = booked[d + h], past = isPast(d, h), on = sel.includes(h);
+        if (c) return `<button class="chip taken" disabled title="${esc(clientById(c.clientId).name)}">${esc(firstName(clientById(c.clientId).name).slice(0, 7))}</button>`;
         return `<button class="chip${on ? " on" : ""}" data-d="${d}" data-h="${h}" ${past ? "disabled" : ""} aria-pressed="${on}">${hm(h)}</button>`;
       }).join("")}</div></section>`;
   }
   el.innerHTML = `
-    <div><h2>¿Cuándo puedes cortar?</h2><p class="muted" style="margin:4px 0 0">Toca las horas libres. Los colegas solo ven estas.</p></div>
-    <div class="legend"><span><i style="background:var(--red)"></i>Libre</span><span><i style="background:var(--warn)"></i>Pedida</span><span><i style="background:var(--ok)"></i>Confirmada</span></div>
+    <div><h2>¿Cuándo puedes cortar?</h2><p class="muted" style="margin:4px 0 0">Marca tus huecos libres. Nadie los ve hasta que se los mandas desde Peticiones.</p></div>
+    <div class="legend"><span><i style="background:var(--red)"></i>Libre</span><span><i style="background:var(--ok)"></i>Pillado</span></div>
     <div class="weeknav"><button class="iconbtn" data-week="-1" ${A.week === 0 ? "disabled" : ""} aria-label="Semana anterior">‹</button>
-      <div style="text-align:center"><b>${lbl}</b><div class="muted small">${esc(fmt(t0, { day: "numeric", month: "short" }))} – ${esc(fmt(addDays(t0, 6), { day: "numeric", month: "short" }))}</div></div>
+      <div style="text-align:center"><b>${lbl}</b><div class="muted small">${esc(weekRange(ymd(t0)))}</div></div>
       <button class="iconbtn" data-week="1" ${A.week >= 5 ? "disabled" : ""} aria-label="Semana siguiente">›</button></div>
     <div class="list">${days}</div>
-    <div class="card"><b>Enlace para pedir cita</b><span class="muted small">Para el grupo de WhatsApp o para alguien nuevo. Les pide nombre y móvil.</span>
+    <div class="card"><b>Enlace para pedir corte</b><span class="muted small">Para el grupo de WhatsApp o para alguien nuevo. Les pide nombre y móvil.</span>
       <div class="copybox">${esc(origin() + "/")}</div>
-      <div class="row"><a class="btn wa sm" href="${wa("", `💈 CabezApp ya está aquí. Pide tu corte (y mira mis reseñas):\n${origin()}/`)}" target="_blank" rel="noopener">${ICON.wa} Mandar por WhatsApp</a>
+      <div class="row"><a class="btn wa sm" href="${wa("", `💈 CabezApp ya está aquí. Pide tu corte para esta semana (y mira las reseñas):\n${origin()}/`)}" target="_blank" rel="noopener">${ICON.wa} Mandar por WhatsApp</a>
       <button class="btn ghost sm" data-copy="${esc(origin() + "/")}">Copiar</button></div></div>`;
 }
 
-const saveTimers = {};
+// Each day saves on its own; edits not yet saved survive the server's reply to another day
+const saveTimers = {}, pendingAvail = {};
 function queueAvailability(d) {
+  pendingAvail[d] = A.db.availability[d] || [];
   clearTimeout(saveTimers[d]);
   saveTimers[d] = setTimeout(async () => {
-    try { await adminCall("availability", { d, hours: A.db.availability[d] || [] }); toast("Horario guardado"); }
-    catch {}
+    const hours = pendingAvail[d];
+    try {
+      await adminCall("availability", { d, hours });
+      if (pendingAvail[d] === hours) delete pendingAvail[d];
+      Object.entries(pendingAvail).forEach(([k, v]) => { if (v.length) A.db.availability[k] = v; else delete A.db.availability[k]; });
+      toast("Huecos guardados");
+      if (A.tab === "horario") drawAdmin();
+    } catch {}
   }, 700);
 }
 
@@ -466,7 +553,7 @@ function paneClientes(el) {
       <button class="btn primary">Añadir</button>
     </form>
     <div class="section"><div class="section-head"><h2>Clientes</h2><span class="muted small">${list.length}</span></div>
-    <div class="list">${list.length ? list.map((c) => clientCard(c, s)).join("") : `<p class="empty">Todavía no hay nadie. Añade al primero arriba o manda el enlace general.</p>`}</div></div>`;
+    <div class="list">${list.length ? list.map((c) => clientCard(c, s)).join("") : `<p class="empty">Todavía no hay nadie. Añade al primero o pasa el enlace general.</p>`}</div></div>`;
 }
 
 function clientCard(c, s) {
@@ -497,8 +584,7 @@ function clientCard(c, s) {
 }
 
 function paneResenas(el) {
-  const db = A.db;
-  const list = [...db.reviews].sort((a, b) => b.date.localeCompare(a.date));
+  const list = [...A.db.reviews].sort((a, b) => b.date.localeCompare(a.date));
   const vis = list.filter((r) => !r.hidden);
   const avg = vis.length ? vis.reduce((a, r) => a + r.stars, 0) / vis.length : 0;
   el.innerHTML = `
@@ -507,7 +593,7 @@ function paneResenas(el) {
       <div class="item-row"><b class="grow">${esc(clientById(r.clientId).name)}</b>${stars(r.stars)}</div>
       ${r.text ? `<p>${esc(r.text)}</p>` : ""}
       <div class="row"><button class="btn ghost sm" data-rv="${r.id}" data-hide="${r.hidden ? 0 : 1}">${r.hidden ? "Volver a mostrar" : "Ocultar"}</button></div>
-    </div>`).join("") : `<p class="empty">Sin reseñas todavía. Cuando marques un corte como hecho, el WhatsApp les pide una.</p>`}</div>`;
+    </div>`).join("") : `<p class="empty">Sin reseñas todavía. Cuando marcas un corte como hecho, el WhatsApp les pide una.</p>`}</div>`;
 }
 
 function paneAjustes(el) {
@@ -516,17 +602,18 @@ function paneAjustes(el) {
     <form class="card" id="cfg">
       <h3>Tu WhatsApp</h3>
       <input class="field" id="cf-phone" type="tel" inputmode="tel" value="${esc(s.adminPhone)}" placeholder="600 123 456">
-      <p class="muted small" style="margin:0">Los colegas te avisan aquí cuando piden cita.</p>
+      <p class="muted small" style="margin:0">Los colegas te avisan aquí cuando piden corte o pillan hueco.</p>
       <h3>Precios</h3>
       <div class="grid2">
         <div><label class="fl" for="cf-cuts">Cortes por bono</label><input class="field" id="cf-cuts" type="number" min="1" max="20" value="${s.cutsPerBono}"></div>
         <div><label class="fl" for="cf-price">Precio bono (€)</label><input class="field" id="cf-price" type="number" min="0" step="0.5" value="${s.bonoPrice}"></div>
         <div><label class="fl" for="cf-loose">Corte suelto (€)</label><input class="field" id="cf-loose" type="number" min="0" step="0.5" value="${s.loosePrice}"></div>
       </div>
-      <h3>Aviso del WhatsApp de confirmación</h3>
+      <h3>Aviso legal de la confirmación</h3>
       <textarea class="field" id="cf-text" maxlength="400">${esc(s.confirmText)}</textarea>
       <button class="btn primary">Guardar ajustes</button>
     </form>
+    ${installCard("Tu panel en la pantalla de inicio.")}
     <button class="btn ghost" id="logout">Cerrar sesión de admin en este móvil</button>`;
   $("#cfg").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -538,17 +625,21 @@ function paneAjustes(el) {
   $("#logout").onclick = () => { store.del(LS_ADMIN); adminLogin(); };
 }
 
-// One delegated handler for the whole admin panel
 function wireAdmin() {
   app.addEventListener("click", async (e) => {
     if (!A.db || route() !== "admin") return;
     const t = e.target.closest("button, a");
-    if (!t) return;
+    if (!t || t.hasAttribute("data-install-btn")) return;
     const ds = t.dataset;
     if (ds.tab) { A.tab = ds.tab; drawAdmin(); window.scrollTo(0, 0); return; }
     if (ds.copy) { copy(ds.copy, "Enlace copiado"); return; }
     if (ds.openClient) { A.tab = "clientes"; A.openClient = ds.openClient; drawAdmin(); return; }
     if (ds.week) { A.week = Math.max(0, A.week + +ds.week); drawAdmin(); return; }
+    if (ds.slot && ds.cid) {
+      const set = A.sel[ds.cid] || (A.sel[ds.cid] = new Set());
+      set.has(ds.slot) ? set.delete(ds.slot) : set.add(ds.slot);
+      drawAdmin(); return;
+    }
     if (ds.d && ds.h) {
       const cur = new Set(A.db.availability[ds.d] || []);
       cur.has(ds.h) ? cur.delete(ds.h) : cur.add(ds.h);
@@ -563,7 +654,15 @@ function wireAdmin() {
     if (ds.act) {
       // WhatsApp links open by themselves; the state change runs alongside
       if (ds.act === "cancel" && ds.sure !== "1") { ds.sure = "1"; t.textContent = "¿Seguro? Toca otra vez"; return; }
-      try { await adminCall(ds.act, { id: ds.id }); toast({ confirm: "Validada", reject: "Rechazada", done: "Corte apuntado", cancel: "Cancelada", "undo-done": "Deshecho" }[ds.act] || "Hecho"); drawAdmin(); } catch {}
+      const body = { id: ds.id };
+      if (ds.act === "offer") body.slots = [...(A.sel[ds.id] || [])];
+      if (ds.act === "assign") body.slot = ds.slot;
+      try {
+        await adminCall(ds.act, body);
+        delete A.sel[ds.id];
+        toast({ offer: "Huecos enviados", assign: "Corte confirmado", reject: "Rechazado", done: "Corte apuntado", cancel: "Cancelado", "undo-done": "Deshecho", sent: "Confirmación marcada" }[ds.act] || "Hecho");
+        drawAdmin();
+      } catch {}
       return;
     }
     if (ds.cact) {

@@ -1,11 +1,12 @@
-// CabezApp API: one JSON document in Netlify Blobs holds everything.
-// Public routes are for the clients (los colegas); /api/admin/* needs the ADMIN_KEY.
+// CabezApp API. One JSON document in Netlify Blobs holds everything.
+// Flow: el colega pide corte para una semana -> Cabezas le pasa huecos -> el colega pilla uno.
 import { getStore } from "@netlify/blobs";
 import crypto from "node:crypto";
 
 const KEY = "db";
 const TZ = "Europe/Madrid";
-const ACTIVE = ["pendiente", "confirmada"];
+const OPEN = ["pedida", "huecos", "confirmada"];
+const PREFS = ["igual", "tardes", "mananas", "finde"];
 
 const emptyDb = () => ({
   settings: {
@@ -17,31 +18,34 @@ const emptyDb = () => ({
       "Aviso legal: no te garantizamos que no te dibujemos un pene con la maquinilla. Eso sí, el degradado te va a quedar de lujo.",
   },
   availability: {}, // { "20261112": ["1700","1800"] }
-  clients: [], // {id, token, name, phone, bonos:[{id, date, cuts, price}], used, createdAt}
-  citas: [], // {id, clientId, d, h, style, note, status, createdAt, loose}
+  clients: [], // {id, token, name, phone, bonos:[{id,date,cuts,price}], used, createdAt}
+  citas: [], // {id, clientId, week, pref, style, note, status, offer:[ "YYYYMMDDHHMM" ], d, h, createdAt}
   reviews: [], // {id, clientId, stars, text, date, hidden}
 });
 
-const json = (data, status = 200) =>
+const json = (data, status = 200, extra = {}) =>
   new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...extra },
   });
 const bad = (msg, status = 400) => json({ error: msg }, status);
 const id = (n = 6) => crypto.randomBytes(n).toString("base64url");
+const clean = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
 
+// ---------- dates (always Madrid time) ----------
 function nowParts() {
   const p = Object.fromEntries(
     new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })
-      .formatToParts(new Date())
-      .map((x) => [x.type, x.value])
+      .formatToParts(new Date()).map((x) => [x.type, x.value])
   );
   return { d: p.year + p.month + p.day, h: (p.hour === "24" ? "00" : p.hour) + p.minute };
 }
-const isPast = (d, h) => {
-  const n = nowParts();
-  return d < n.d || (d === n.d && h <= n.h);
-};
+const toUTC = (d) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(4, 6) - 1, +d.slice(6, 8)));
+const fromUTC = (x) => x.getUTCFullYear() + String(x.getUTCMonth() + 1).padStart(2, "0") + String(x.getUTCDate()).padStart(2, "0");
+const addDays = (d, n) => { const x = toUTC(d); x.setUTCDate(x.getUTCDate() + n); return fromUTC(x); };
+const mondayOf = (d) => addDays(d, -((toUTC(d).getUTCDay() + 6) % 7));
+const weeks = () => { const cur = mondayOf(nowParts().d); return { current: cur, next: addDays(cur, 7) }; };
+const isPast = (d, h) => { const n = nowParts(); return d < n.d || (d === n.d && h <= n.h); };
 
 const normPhone = (p) => {
   let d = String(p || "").replace(/\D/g, "");
@@ -49,25 +53,21 @@ const normPhone = (p) => {
   if (d.length === 9 && /^[6789]/.test(d)) d = "34" + d;
   return d.length >= 10 && d.length <= 15 ? d : "";
 };
-const clean = (s, max) => String(s || "").replace(/\s+/g, " ").trim().slice(0, max);
-
 const totalCuts = (c) => c.bonos.reduce((a, b) => a + b.cuts, 0);
 const remaining = (c) => Math.max(0, totalCuts(c) - c.used);
 
-function takenSlots(db, exceptId) {
+function takenSlots(db) {
   const s = new Set();
-  db.citas.forEach((c) => { if ((ACTIVE.includes(c.status) || c.status === "hecha") && c.id !== exceptId) s.add(c.d + c.h); });
+  db.citas.forEach((c) => { if ((c.status === "confirmada" || c.status === "hecha") && c.d) s.add(c.d + c.h); });
   return s;
 }
-function openAvailability(db) {
-  const taken = takenSlots(db);
-  const out = {};
-  Object.keys(db.availability).sort().forEach((d) => {
-    const hs = (db.availability[d] || []).filter((h) => !isPast(d, h) && !taken.has(d + h)).sort();
-    if (hs.length) out[d] = hs;
-  });
-  return out;
-}
+const slotFree = (db, slot, taken = takenSlots(db)) => {
+  const d = slot.slice(0, 8), h = slot.slice(8);
+  return (db.availability[d] || []).includes(h) && !isPast(d, h) && !taken.has(slot);
+};
+// A request counts as open while it has no time yet, or its time is still ahead
+const isOpen = (c) => OPEN.includes(c.status) && !(c.status === "confirmada" && isPast(c.d, c.h));
+
 function publicReviews(db) {
   const byId = Object.fromEntries(db.clients.map((c) => [c.id, c]));
   const list = db.reviews
@@ -78,22 +78,26 @@ function publicReviews(db) {
   return { list: list.slice(0, 30), avg: Math.round(avg * 10) / 10, count: list.length };
 }
 function publicSettings(db) {
-  const { cutsPerBono, bonoPrice, loosePrice, adminPhone } = db.settings;
-  return { cutsPerBono, bonoPrice, loosePrice, adminPhone };
+  const { cutsPerBono, bonoPrice, loosePrice, adminPhone, confirmText } = db.settings;
+  return { cutsPerBono, bonoPrice, loosePrice, adminPhone, confirmText };
 }
 function clientView(db, c) {
+  const taken = takenSlots(db);
   return {
     name: c.name,
-    phoneSet: !!c.phone,
     total: totalCuts(c),
     used: c.used,
     remaining: remaining(c),
     bonos: c.bonos.length,
     citas: db.citas
       .filter((x) => x.clientId === c.id)
-      .sort((a, b) => (b.d + b.h).localeCompare(a.d + a.h))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, 20)
-      .map(({ id, d, h, style, status, loose }) => ({ id, d, h, style, status, loose })),
+      .map((x) => ({
+        id: x.id, week: x.week, pref: x.pref, style: x.style, status: x.status, d: x.d || null, h: x.h || null, loose: !!x.loose,
+        open: isOpen(x),
+        offer: x.status === "huecos" ? (x.offer || []).filter((s) => slotFree(db, s, taken)) : [],
+      })),
     myReview: db.reviews.find((r) => r.clientId === c.id) || null,
   };
 }
@@ -108,17 +112,41 @@ async function mutate(store, fn) {
     const { db, etag } = await load(store);
     const result = fn(db);
     if (result && result.error) return result;
-    const opts = etag ? { onlyIfMatch: etag } : { onlyIfNew: true };
-    const w = await store.setJSON(KEY, db, opts);
+    const w = await store.setJSON(KEY, db, etag ? { onlyIfMatch: etag } : { onlyIfNew: true });
     if (w.modified) return { db, result };
   }
   return { error: "Hay mucho lío ahora mismo, prueba otra vez", status: 409 };
 }
 
-// ---------- handlers ----------
+// ---------- handler ----------
 export default async (req) => {
   const url = new URL(req.url);
   const path = url.pathname.replace(/^\/api\/?/, "");
+
+  // Installable app: the manifest opens the page it was installed from
+  if (path === "manifest") {
+    const s = url.searchParams.get("start") || "/";
+    const start = /^\/(c\/[A-Za-z0-9_-]{6,40}|admin)?$/.test(s) ? s : "/";
+    return json({
+      name: start === "/admin" ? "CabezApp Admin" : "CabezApp",
+      short_name: "CabezApp",
+      description: "Pilla tu corte con Cabezas",
+      id: start,
+      start_url: start,
+      scope: "/",
+      display: "standalone",
+      orientation: "portrait",
+      background_color: "#0B0E17",
+      theme_color: "#0B0E17",
+      lang: "es",
+      icons: [
+        { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+        { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+        { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+      ],
+    }, 200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "public, max-age=3600" });
+  }
+
   const store = getStore({ name: "cabezapp", consistency: "strong" });
   let body = {};
   if (req.method === "POST") {
@@ -128,20 +156,22 @@ export default async (req) => {
   // ----- public -----
   if (path === "public" && req.method === "GET") {
     const { db } = await load(store);
-    return json({ settings: publicSettings(db), availability: openAvailability(db), reviews: publicReviews(db) });
+    return json({ settings: publicSettings(db), reviews: publicReviews(db), weeks: weeks() });
   }
 
   if (path === "me" && req.method === "GET") {
     const { db } = await load(store);
     const c = db.clients.find((x) => x.token === url.searchParams.get("t"));
     if (!c) return bad("Este enlace no existe. Pídele uno nuevo a Cabezas.", 404);
-    return json({ me: clientView(db, c), settings: publicSettings(db), availability: openAvailability(db), reviews: publicReviews(db) });
+    return json({ me: clientView(db, c), settings: publicSettings(db), reviews: publicReviews(db), weeks: weeks() });
   }
 
   if (path === "request" && req.method === "POST") {
-    const d = String(body.d || ""), h = String(body.h || "");
-    if (!/^\d{8}$/.test(d) || !/^\d{4}$/.test(h)) return bad("Elige día y hora");
-    const style = clean(body.style, 40) || "Lo de siempre";
+    const w = weeks();
+    const week = String(body.week || "");
+    if (week !== w.current && week !== w.next) return bad("Elige esta semana o la que viene");
+    const pref = PREFS.includes(body.pref) ? body.pref : "igual";
+    const style = clean(body.style, 40) || "Degradado";
     const note = clean(body.note, 200);
     const out = await mutate(store, (db) => {
       let c = body.t ? db.clients.find((x) => x.token === body.t) : null;
@@ -155,29 +185,39 @@ export default async (req) => {
           c = { id: id(), token: id(9), name, phone, bonos: [], used: 0, createdAt: new Date().toISOString() };
           db.clients.push(c);
         }
-      } else if (!c.phone && body.phone) {
-        const phone = normPhone(body.phone);
-        if (phone) c.phone = phone;
       }
-      if (!(db.availability[d] || []).includes(h) || isPast(d, h)) return { error: "Esa hora ya no está libre, elige otra", status: 409 };
-      if (takenSlots(db).has(d + h)) return { error: "Te la han quitado, elige otra hora", status: 409 };
-      const open = db.citas.filter((x) => x.clientId === c.id && ACTIVE.includes(x.status) && !isPast(x.d, x.h));
-      if (open.length >= 2) return { error: "Ya tienes 2 citas pedidas. Espera a que pasen o cancela una." };
-      const cita = { id: id(), clientId: c.id, d, h, style, note, status: "pendiente", createdAt: new Date().toISOString() };
+      if (db.citas.some((x) => x.clientId === c.id && isOpen(x))) return { error: "Ya tienes un corte pedido. Espera a que Cabezas te pase huecos." };
+      const cita = { id: id(), clientId: c.id, week, pref, style, note, status: "pedida", offer: [], createdAt: new Date().toISOString() };
       db.citas.push(cita);
       return { cita };
     });
     if (out.error) return bad(out.error, out.status || 400);
-    return json({ ok: true, cita: out.result.cita });
+    return json({ ok: true });
+  }
+
+  if (path === "pick" && req.method === "POST") {
+    const slot = String(body.slot || "");
+    if (!/^\d{12}$/.test(slot)) return bad("Elige un hueco");
+    const out = await mutate(store, (db) => {
+      const c = db.clients.find((x) => x.token === body.t);
+      const cita = c && db.citas.find((x) => x.id === body.id && x.clientId === c.id);
+      if (!cita || cita.status !== "huecos") return { error: "Esta petición ya no admite huecos" };
+      if (!(cita.offer || []).includes(slot)) return { error: "Ese hueco no te lo han ofrecido" };
+      if (!slotFree(db, slot)) return { error: "Te lo han pillado antes. Elige otro.", status: 409 };
+      cita.d = slot.slice(0, 8); cita.h = slot.slice(8);
+      cita.status = "confirmada"; cita.pickedAt = new Date().toISOString();
+      return { cita };
+    });
+    if (out.error) return bad(out.error, out.status || 400);
+    return json({ ok: true, d: out.result.cita.d, h: out.result.cita.h });
   }
 
   if (path === "cancel" && req.method === "POST") {
     const out = await mutate(store, (db) => {
       const c = db.clients.find((x) => x.token === body.t);
       const cita = c && db.citas.find((x) => x.id === body.id && x.clientId === c.id);
-      if (!cita || !ACTIVE.includes(cita.status)) return { error: "No se puede cancelar" };
-      cita.status = "cancelada";
-      cita.cancelledBy = "cliente";
+      if (!cita || !OPEN.includes(cita.status)) return { error: "No se puede cancelar" };
+      cita.status = "cancelada"; cita.cancelledBy = "cliente";
     });
     if (out.error) return bad(out.error);
     return json({ ok: true });
@@ -208,9 +248,8 @@ export default async (req) => {
     const adminView = (db) => ({
       ...db,
       clients: db.clients.map((c) => ({ ...c, total: totalCuts(c), remaining: remaining(c) })),
-      open: openAvailability(db),
+      weeks: weeks(),
     });
-
     if (path === "admin" && req.method === "GET") {
       const { db } = await load(store);
       return json(adminView(db));
@@ -229,24 +268,38 @@ export default async (req) => {
           Object.keys(db.availability).forEach((d) => { if (d < today) delete db.availability[d]; });
           return;
         }
-        case "confirm":
-          if (!cita) return { error: "Cita no encontrada" };
-          cita.status = "confirmada"; cita.confirmedAt = new Date().toISOString(); return;
+        case "offer": {
+          if (!cita || !["pedida", "huecos"].includes(cita.status)) return { error: "Esta petición ya no está abierta" };
+          const taken = takenSlots(db);
+          const slots = [...new Set(body.slots || [])].filter((s) => /^\d{12}$/.test(s) && slotFree(db, s, taken)).sort();
+          if (!slots.length) return { error: "Elige al menos un hueco libre" };
+          cita.offer = slots; cita.status = "huecos"; cita.offeredAt = new Date().toISOString();
+          return;
+        }
+        case "assign": {
+          if (!cita || !["pedida", "huecos"].includes(cita.status)) return { error: "Esta petición ya no está abierta" };
+          const s = String(body.slot || "");
+          if (!/^\d{12}$/.test(s) || !slotFree(db, s)) return { error: "Ese hueco no está libre" };
+          cita.d = s.slice(0, 8); cita.h = s.slice(8); cita.status = "confirmada"; cita.pickedAt = new Date().toISOString();
+          return;
+        }
         case "reject":
-          if (!cita) return { error: "Cita no encontrada" };
+          if (!cita) return { error: "Petición no encontrada" };
           cita.status = "rechazada"; return;
         case "cancel":
-          if (!cita) return { error: "Cita no encontrada" };
+          if (!cita) return { error: "Petición no encontrada" };
           cita.status = "cancelada"; cita.cancelledBy = "admin"; return;
+        case "sent":
+          if (!cita) return { error: "Petición no encontrada" };
+          cita.confirmSent = true; return;
         case "done": {
-          if (!cita) return { error: "Cita no encontrada" };
-          if (cita.status === "hecha") return;
+          if (!cita || cita.status !== "confirmada") return { error: "Solo se marcan cortes confirmados" };
           const c = client(cita.clientId);
           if (c && remaining(c) > 0) { c.used += 1; cita.loose = false; } else cita.loose = true;
           cita.status = "hecha"; cita.doneAt = new Date().toISOString(); return;
         }
         case "undo-done": {
-          if (!cita || cita.status !== "hecha") return { error: "No está marcada como hecha" };
+          if (!cita || cita.status !== "hecha") return { error: "No está marcado como hecho" };
           const c = client(cita.clientId);
           if (c && !cita.loose && c.used > 0) c.used -= 1;
           cita.status = "confirmada"; delete cita.loose; return;
@@ -285,6 +338,7 @@ export default async (req) => {
           const i = c.bonos.findIndex((b) => b.id === body.bonoId);
           if (i < 0) return { error: "Bono no encontrado" };
           c.bonos.splice(i, 1);
+          c.used = Math.min(c.used, totalCuts(c));
           return;
         }
         case "adjust": {
@@ -309,7 +363,7 @@ export default async (req) => {
         }
         case "settings": {
           const s = db.settings;
-          const n = (v, min, max) => Math.min(max, Math.max(min, Number(v)));
+          const n = (v, min, max) => Math.min(max, Math.max(min, Number(v) || 0));
           if (body.cutsPerBono !== undefined) s.cutsPerBono = Math.round(n(body.cutsPerBono, 1, 20));
           if (body.bonoPrice !== undefined) s.bonoPrice = n(body.bonoPrice, 0, 500);
           if (body.loosePrice !== undefined) s.loosePrice = n(body.loosePrice, 0, 100);

@@ -229,3 +229,32 @@ details.client > summary::-webkit-details-marker { display: none; }
 }
 .toast.bad { background: var(--red); color: #fff; }
 footer.foot { color: var(--muted); font-size: 12px; text-align: center; padding-top: 8px; }
+
+/* v2: brand, request flow, install */
+.brand { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; }
+.brand img { width: 40px; height: 40px; display: block; }
+.hero-logo { width: 132px; height: 132px; border-radius: 50%; background: var(--red); display: grid; place-items: center; transform: rotate(-6deg); flex: none; box-shadow: 0 10px 40px rgba(255,59,78,.25); }
+.hero-logo img { width: 116px; height: 116px; }
+.hero { display: flex; align-items: center; gap: 16px; }
+@media (max-width: 400px) { .hero-logo { width: 96px; height: 96px; } .hero-logo img { width: 84px; height: 84px; } }
+.weekpick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.wbtn { background: var(--surface-2); border: 1.5px solid transparent; border-radius: 16px; padding: 12px; text-align: left; display: flex; flex-direction: column; gap: 2px; }
+.wbtn b { font-family: var(--f-display); font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+.wbtn span { font-size: 13px; color: var(--muted); }
+.wbtn.on { border-color: var(--red); background: var(--red-soft); }
+.wbtn.on b { color: var(--red); }
+.slotday { display: flex; flex-direction: column; gap: 8px; }
+.slotday h3 { font-size: 14px; color: var(--muted); font-weight: 800; letter-spacing: .04em; }
+.state { border-radius: 20px; padding: 18px; display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--line); background: var(--surface); }
+.state.hot { background: linear-gradient(135deg, rgba(255,59,78,.18), rgba(91,134,255,.12)); border-color: rgba(255,59,78,.45); }
+.state h2 { font-size: 24px; }
+.state p { margin: 0; }
+.disclaimer { font-size: 13px; color: var(--muted); border-left: 3px solid var(--star); padding-left: 10px; }
+.install { display: flex; gap: 12px; align-items: center; }
+.install img { width: 52px; height: 52px; border-radius: 12px; flex: none; }
+.install .grow p { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+.st-pedida { background: var(--warn-soft); color: var(--warn); }
+.st-huecos { background: var(--blue-soft); color: var(--blue); }
+.offerbox { display: flex; flex-direction: column; gap: 8px; }
+.chip.sel { background: var(--blue); border-color: var(--blue); color: #fff; }
+#rq { display: flex; flex-direction: column; gap: 22px; }
